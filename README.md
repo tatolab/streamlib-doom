@@ -113,6 +113,19 @@ scripts/demo-reel-neural.py               # the reel
 STREAMLIB_DOOM_STYLE=claymation …         # any preset, or a free-text prompt, as the held look
 ```
 
+Holding a look steady is its own problem, and `streamlib_doom/capture.py` exists to settle it with
+measurements rather than taste: add it over MCP, let it write the renderer's view and the pose that
+drew it for a few dozen frames, remove it, and replay that one scene offline against as many settings
+as you like. Two numbers matter — how much a frame changes from the last one reprojected into its
+camera, and how much high-frequency detail survives — and they pull against each other. Carrying more
+of the previous frame and refining it gently halves the change, but the carry is a resample, so the
+studs bleed away over a few seconds and a perfectly steady picture is usually a washed-out one.
+Sharpening the carried image and re-imagining hard from the game frame every sixth frame puts them
+back. Measured over a 48-frame capture of the robot walking, that lands 13% steadier *and* 24% more
+detailed than refining hard every frame, and it is what ships. A longer, more specific prompt measured
+slightly worse on both counts; a reference image would need a base model IP-Adapter supports, and
+sd-turbo's SD 2.1 is not one.
+
 What made it fast was not resolution: at this size the models are launch-bound, so the UNet costs the same on 64×40 latents as on 44×28. Encoding each prompt once and letting inductor replay the denoising step as a CUDA graph took a frame from 98 ms to 52 ms under full load. The models pace themselves — diffusion 12 Hz, depth 4 Hz, detector 1.5 Hz — so the renderer keeps 60 fps and the console around 50 with the GPU at 50 to 80 percent. Telemetry shows the GPU load, each model's frame time and score, and the console's own rate, so the picture never claims more than it measures.
 
 One engine finding worth knowing if you build on this: a link wired over MCP into a helper that is still loading its model can fail to open its port on either end, and the runtime reports the helper as running before its setup has finished. `scripts/neural-setup.py` therefore proves each node with `tap` on its output and the console's own `/panes` status before it returns, and re-wires whichever link stays silent.
@@ -174,6 +187,7 @@ Each box is one `@processor` class in `streamlib_doom/`, running in its own chil
 | `planner.py` | the costmap, A*, string pulling, door handling, and the mission planner processor whose controls enter the game over a link |
 | `showcase.py` | the live-graph panel, the caption bar, telemetry with the frame witness, and the 1920x1080 console kernel the engine records |
 | `neural.py` | the diffusion re-render, the depth network graded against truth, the detector graded against labels, and the repainter that patches the atlas |
+| `capture.py` | writes the renderer's view and the pose that drew it, so a scene replays offline against a model as often as a parameter sweep needs |
 
 ## Record the demo
 

@@ -143,8 +143,19 @@ and it has to drive every frame. What ships starts each denoise from the current
 a minority carry to damp the shimmer, and replaces the lost stability with conditioning rather than
 recycling — two ControlNets, the renderer's depth and its own per-pixel surface classes, painted in
 ADE20K's colours so a segmentation ControlNet reads sky, wall, floor and monster as the things they
-are. That costs about 5 ms a frame and holds 12 Hz. The class map is free: the renderer already
-writes it into the blue channel for the sensors. A longer, more specific prompt measured
+are. That costs about 5 ms a frame. The class map is free: the renderer already writes it into the blue
+channel for the sensors.
+
+With the geometry pinned by those two ControlNets the denoise can run at strength 0.85 instead of
+0.5, which is what finally puts studs on every surface: the model replaces the flat 1993 texture
+outright rather than tinting it, and the ControlNets stop the shapes drifting. A negative prompt
+naming what to avoid — `3d render, video game graphics, low-poly, cell-shaded, flat shading` —
+needs guidance above 1 to apply at all, and that second pass per step is worth it. Measured over
+the captured walk, going from strength 0.5 to 0.85 with a negative prompt took detail from 5.4 to
+14.3, nearly three times, at 6 Hz instead of 12.
+
+Loading two ControlNets and compiling them takes about 95 s and the engine caps `setup()` at 60 s,
+so the load runs on a worker thread and `process()` publishes nothing until it reports ready. A longer, more specific prompt measured
 slightly worse on both counts; a reference image would need a base model IP-Adapter supports, and
 sd-turbo's SD 2.1 is not one.
 

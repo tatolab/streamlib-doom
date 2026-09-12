@@ -1,0 +1,27 @@
+[project]
+name = "streamlib-doom"
+version = "0.1.0"
+description = "DOOM E1M1 as a StreamLib graph: the 1993 level rendered by GPU processors, playable from a phone."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["streamlib>=0.21.0", "numpy>=2.1"]
+
+[project.optional-dependencies]
+webrtc = ["streamlib-webrtc>=0.2.0"]
+test = ["pytest>=8"]
+
+# streamlib and its extension wheels are served from their own simple index
+# until the PyPI publication that follows the project rename.
+[[tool.uv.index]]
+name = "streamlib"
+url = "https://tatolab.github.io/streamlib/simple/"
+explicit = true
+
+[tool.uv.sources]
+streamlib = { index = "streamlib" }
+streamlib-webrtc = { index = "streamlib" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

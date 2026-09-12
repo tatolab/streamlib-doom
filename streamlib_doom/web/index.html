@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>DOOM on StreamLib</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; font-family: monospace; }
+  #screen { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); image-rendering: pixelated; image-rendering: crisp-edges; background: #000; }
+  #overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #e33; background: rgba(0,0,0,.85); font-size: 22px; text-align: center; padding: 24px; z-index: 10; }
+  #overlay small { color: #999; font-size: 14px; margin-top: 12px; line-height: 1.5; }
+  .pad { position: absolute; bottom: 4vh; width: 34vw; height: 34vw; max-width: 180px; max-height: 180px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); z-index: 5; }
+  #move { left: 4vw; } #look { right: 4vw; border-style: dashed; }
+  #stick { position: absolute; width: 40%; height: 40%; left: 30%; top: 30%; border-radius: 50%; background: rgba(255,255,255,.35); }
+  .btn { position: absolute; z-index: 6; width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(255,80,80,.6); color: #fff; background: rgba(120,0,0,.45); font-size: 13px; display: flex; align-items: center; justify-content: center; }
+  #fire { right: 4vw; bottom: calc(4vh + 190px); width: 84px; height: 84px; font-size: 16px; }
+  #use { right: calc(4vw + 100px); bottom: calc(4vh + 200px); }
+  #wpn { left: 4vw; bottom: calc(4vh + 200px); border-color: rgba(200,200,80,.6); background: rgba(80,80,0,.45); }
+  #status { position: absolute; top: 6px; left: 8px; color: #8f8; font-size: 12px; z-index: 6; opacity: .8; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="200"></canvas>
+<video id="video" autoplay playsinline style="display:none; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#000;"></video>
+<div id="status"></div>
+<div id="move" class="pad"><div id="stick"></div></div>
+<div id="look" class="pad"></div>
+<div id="fire" class="btn">FIRE</div>
+<div id="use" class="btn">USE</div>
+<div id="wpn" class="btn">WPN</div>
+<div id="overlay"><div>DOOM · E1M1 · StreamLib</div><small>Left pad: move. Right pad: turn.<br>FIRE shoots, USE opens doors, WPN swaps pistol/shotgun.<br><br>Tap to start (turns the sound on).</small></div>
+<script>
+(() => {
+  const host = location.hostname;
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const pixels = new Uint32Array(image.data.buffer);
+  const status = document.getElementById('status');
+  let palettes = null;   // Uint32Array[14][256] as ABGR little-endian words
+  let framesShown = 0, lastReport = performance.now(), framesSinceReport = 0;
+
+  const video = document.getElementById('video');
+  const params = new URLSearchParams(location.search);
+  let transport = 'ws';
+  function fit() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const scale = Math.min(w / 320, h / 240);      // the 4:3 stretch a 1993 monitor applied
+    for (const el of [canvas, video]) { el.style.width = Math.floor(320 * scale) + 'px'; el.style.height = Math.floor(240 * scale) + 'px'; }
+  }
+  // WebRTC playback of the H.264 + Opus the node publishes over WHIP, played back over WHEP.
+  async function startWhep(url) {
+    transport = 'webrtc'; canvas.style.display = 'none'; video.style.display = 'block';
+    const pc = new RTCPeerConnection();
+    pc.addTransceiver('video', { direction: 'recvonly' }); pc.addTransceiver('audio', { direction: 'recvonly' });
+    pc.ontrack = (e) => { video.srcObject = e.streams[0]; video.play().catch(() => {}); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((done) => { if (pc.iceGatheringState === 'complete') return done(); pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') done(); }; setTimeout(done, 1500); });
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+    if (!response.ok) { status.textContent = 'WHEP refused: ' + response.status; return; }
+    await pc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+  }
+  window.addEventListener('resize', fit); fit();
+
+  // ---- audio: the score loops, effects play on events the game sends ----
+  let audioCtx = null, music = null, sfx = {};
+  const SFX = ["DSPISTOL","DSSHOTGN","DSSGCOCK","DSITEMUP","DSWPNUP","DSPOSIT1","DSPOSIT2","DSPOSIT3","DSBGSIT1","DSBGSIT2",
+               "DSPODTH1","DSPODTH2","DSPODTH3","DSBGDTH1","DSBGDTH2","DSPOPAIN","DSPLPAIN","DSPLDETH","DSDOROPN","DSDORCLS",
+               "DSPSTART","DSPSTOP","DSSWTCHN","DSNOWAY","DSCLAW","DSFIRSHT","DSFIRXPL","DSBAREXP","DSOOF"];
+  async function startAudio() {
+    if (transport === 'webrtc') { video.muted = false; return; }   // the stream carries its own sound
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    for (const name of SFX) {
+      try { const r = await fetch('/sfx/' + name + '.wav'); sfx[name] = await audioCtx.decodeAudioData(await r.arrayBuffer()); } catch (e) {}
+    }
+    music = new Audio('/music.wav'); music.loop = true; music.volume = 0.55; music.play().catch(() => {});
+  }
+  function play(name) {
+    const buffer = sfx[name]; if (!audioCtx || !buffer) return;
+    const source = audioCtx.createBufferSource(); source.buffer = buffer;
+    const gain = audioCtx.createGain(); gain.gain.value = 0.9; source.connect(gain); gain.connect(audioCtx.destination); source.start();
+  }
+
+  // ---- frames: [palette u8][flags u8][deflate-raw of 64000 indices] ----
+  let frameSocket = null, inflating = false;
+  async function inflate(bytes) {
+    const ds = new DecompressionStream('deflate-raw');
+    const writer = ds.writable.getWriter(); writer.write(bytes); writer.close();
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  }
+  function draw(indices, palette) {
+    const lut = palettes[palette] || palettes[0];
+    for (let i = 0; i < 64000; i++) pixels[i] = lut[indices[i]];
+    ctx.putImageData(image, 0, 0);
+    framesShown++; framesSinceReport++;
+  }
+  function connectFrames() {
+    frameSocket = new WebSocket('ws://' + host + ':' + location.port + '/frames');
+    frameSocket.binaryType = 'arraybuffer';
+    frameSocket.onmessage = async (e) => {
+      if (typeof e.data === 'string') {
+        const msg = JSON.parse(e.data);
+        if (msg.events) for (const name of msg.events) play(name);
+        return;
+      }
+      if (inflating) return;                 // a slow phone drops frames rather than queueing them
+      inflating = true;
+      try {
+        const bytes = new Uint8Array(e.data);
+        const palette = bytes[0];
+        const indices = bytes[1] === 1 ? await inflate(bytes.subarray(2)) : bytes.subarray(2);
+        if (palettes) draw(indices, palette);
+      } finally { inflating = false; }
+    };
+    frameSocket.onclose = () => setTimeout(connectFrames, 1000);
+  }
+
+  // ---- controls: one JSON message per animation frame, or on change ----
+  let controlSocket = null;
+  const state = { forward: 0, strafe: 0, turn: 0, fire: 0, use: 0, weapon: 0 };
+  function connectControls() {
+    controlSocket = new WebSocket('ws://' + host + ':8667/');
+    controlSocket.onclose = () => setTimeout(connectControls, 1000);
+  }
+  let turnAccum = 0;
+  function sendControls() {
+    if (controlSocket && controlSocket.readyState === 1) {
+      const msg = { f: state.forward, s: state.strafe, t: turnAccum, fire: state.fire, use: state.use, w: state.weapon };
+      controlSocket.send(JSON.stringify(msg));
+      turnAccum = 0; state.weapon = 0;
+    }
+    requestAnimationFrame(sendControls);
+  }
+
+  // left pad: virtual stick
+  const move = document.getElementById('move'), stick = document.getElementById('stick');
+  let moveTouch = null, moveOrigin = null;
+  move.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; moveTouch = t.identifier; moveOrigin = [t.clientX, t.clientY]; e.preventDefault(); }, { passive: false });
+  move.addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) if (t.identifier === moveTouch) {
+      const r = move.getBoundingClientRect().width / 2, dx = (t.clientX - moveOrigin[0]) / r, dy = (t.clientY - moveOrigin[1]) / r;
+      const len = Math.hypot(dx, dy), k = len > 1 ? 1 / len : 1;
+      state.strafe = dx * k; state.forward = -dy * k;
+      stick.style.transform = 'translate(' + (dx * k * r * 0.6) + 'px,' + (dy * k * r * 0.6) + 'px)';
+    }
+    e.preventDefault();
+  }, { passive: false });
+  const moveEnd = (e) => { for (const t of e.changedTouches) if (t.identifier === moveTouch) { moveTouch = null; state.forward = 0; state.strafe = 0; stick.style.transform = ''; } };
+  move.addEventListener('touchend', moveEnd); move.addEventListener('touchcancel', moveEnd);
+
+  // right pad: drag to turn (degrees per pixel)
+  const look = document.getElementById('look');
+  let lookTouch = null, lookLast = null;
+  look.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; lookTouch = t.identifier; lookLast = t.clientX; e.preventDefault(); }, { passive: false });
+  look.addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) if (t.identifier === lookTouch) { turnAccum += (t.clientX - lookLast) * 0.55; lookLast = t.clientX; }
+    e.preventDefault();
+  }, { passive: false });
+  const lookEnd = (e) => { for (const t of e.changedTouches) if (t.identifier === lookTouch) lookTouch = null; };
+  look.addEventListener('touchend', lookEnd); look.addEventListener('touchcancel', lookEnd);
+
+  function button(id, down, up) {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', (e) => { down(); e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchend', (e) => { up(); e.preventDefault(); }, { passive: false });
+    el.addEventListener('touchcancel', up);
+    el.addEventListener('mousedown', down); el.addEventListener('mouseup', up);
+  }
+  button('fire', () => state.fire = 1, () => state.fire = 0);
+  button('use', () => state.use = 1, () => state.use = 0);
+  let weaponToggle = 2;
+  button('wpn', () => { weaponToggle = weaponToggle === 2 ? 3 : 2; state.weapon = weaponToggle; }, () => {});
+
+  // keyboard, for a laptop on the same network
+  const keys = { KeyW: ['forward', 1], KeyS: ['forward', -1], KeyA: ['strafe', -1], KeyD: ['strafe', 1], Space: ['fire', 1], KeyE: ['use', 1] };
+  window.addEventListener('keydown', (e) => { if (keys[e.code]) { state[keys[e.code][0]] = keys[e.code][1]; e.preventDefault(); } if (e.code === 'ArrowLeft') turnAccum -= 6; if (e.code === 'ArrowRight') turnAccum += 6; if (e.code === 'Digit2') state.weapon = 2; if (e.code === 'Digit3') state.weapon = 3; });
+  window.addEventListener('keyup', (e) => { if (keys[e.code]) state[keys[e.code][0]] = 0; });
+
+  document.getElementById('overlay').addEventListener('click', async () => {
+    document.getElementById('overlay').style.display = 'none';
+    if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    await startAudio();
+  }, { once: true });
+
+  setInterval(() => {
+    const now = performance.now(), fps = framesSinceReport / ((now - lastReport) / 1000);
+    status.textContent = (transport === 'webrtc' ? 'webrtc ' : (frameSocket && frameSocket.readyState === 1 ? 'frames ' + fps.toFixed(0) + ' fps' : 'frames offline')) + ' · controls ' + (controlSocket && controlSocket.readyState === 1 ? 'ok' : 'offline');
+    lastReport = now; framesSinceReport = 0;
+  }, 1000);
+
+  fetch('/palettes.bin').then(r => r.arrayBuffer()).then(buffer => {
+    const raw = new Uint8Array(buffer); palettes = [];
+    for (let p = 0; p < 14; p++) {
+      const lut = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) { const o = (p * 256 + i) * 3; lut[i] = 0xff000000 | (raw[o + 2] << 16) | (raw[o + 1] << 8) | raw[o]; }
+      palettes.push(lut);
+    }
+    connectControls(); requestAnimationFrame(sendControls);
+    fetch('/config.json').then(r => r.json()).catch(() => ({})).then((config) => {
+      if (config.whep_url && params.get('transport') === 'webrtc') {
+        startWhep(config.whep_url);
+      } else {
+        connectFrames();
+        if (config.whep_url) { const a = document.createElement('a'); a.href = '?transport=webrtc'; a.textContent = 'switch to WebRTC (H.264)'; a.style.cssText = 'position:absolute;top:6px;right:8px;color:#8cf;font-size:12px;z-index:6'; document.body.appendChild(a); }
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -512,18 +512,21 @@ class CaptionPanel(_PanelPublisher):
                 blit(canvas, render_text(small, 1120, 40, size, "rgb(180,190,210)", FONT), 22, 104 + (26 - size) // 2)
             x = 1180
             line(canvas, x - 22, 14, x - 22, CAPTION_H - 14, (40, 44, 58), 2)
+            blit(canvas, render_text("GAME DIRECTOR  ·  MCP", 700, 26, 19, "rgb(255,200,80)", FONT_BOLD), x, 8)
+            blit(canvas, render_text('./director.sh "spawn three imps behind me"', 700, 24, 16, "rgb(150,162,182)", FONT), x, 34)
             if prompt:
-                blit(canvas, render_text("CLAUDE, DIRECTING  ·  claude -p on the desktop, MCP into this node", 700, 24, 15, "rgb(255,200,80)", FONT_BOLD), x, 12)
-                y = 38
-                for l in _wrap("› " + prompt, 52)[:3]:
-                    blit(canvas, render_text(l, 700, 30, 22, "rgb(255,214,90)", FONT_BOLD), x, y)
-                    y += 28
-                for l in _wrap(answer, 62)[:6]:
-                    blit(canvas, render_text(l, 700, 26, 18, "rgb(230,234,240)", FONT), x, y)
-                    y += 23
+                y = 62
+                for l in _wrap("› " + prompt, 54)[:3]:
+                    blit(canvas, render_text(l, 700, 28, 21, "rgb(255,214,90)", FONT_BOLD), x, y)
+                    y += 26
+                for l in _wrap(answer, 64)[:5]:
+                    blit(canvas, render_text(l, 700, 25, 17, "rgb(230,234,240)", FONT), x, y)
+                    y += 22
             else:
-                blit(canvas, render_text("CLAUDE, DIRECTING  ·  claude -p on the desktop, MCP into this node", 700, 24, 15, "rgb(255,200,80)", FONT_BOLD), x, 12)
-                blit(canvas, render_text("waiting for a prompt…", 700, 30, 20, "rgb(120,130,150)", FONT), x, 44)
+                y = 64
+                for l in DIRECTOR_ACTIONS:
+                    blit(canvas, render_text(l, 700, 24, 16, "rgb(196,206,222)", FONT), x, y)
+                    y += 24
             self.canvas, self.last_key = canvas, key
         self._publish(ctx, self.canvas, "panel_to_downstream", {"caption": big})
         self.frames += 1
@@ -746,6 +749,13 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 """
 
 REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
+DIRECTOR_ACTIONS = (
+    "spawn monsters  ·  give weapons  ·  set the lights",
+    "screen effect  ·  HUD message  ·  god  ·  heal",
+    "mission: patrol, courtyard, hangar, circle, hold",
+    "style: any prompt for the re-render  ·  repaint",
+    "control: stop or auto  —  who drives the robot",
+)
 PANES_PORT = int(os.environ.get("STREAMLIB_DOOM_PANES_PORT", "8669"))
 BADGES = ("AUTONOMY  ·  the planner drives, from its own camera", "TELEOP  ·  a hand has the controls; autonomy waits", "MANUAL  ·  autonomy is off, the controls are yours")
 BADGE_W = 640
@@ -838,8 +848,8 @@ class ConsoleCompositor:
             "caption": self._placeholder(gpu, CAPTION_W, CAPTION_H, ""),
         }
         chrome = numpy.zeros((OUT_H, OUT_W, 4), dtype=numpy.uint8)
-        blit(chrome, render_text("STREAMLIB", 300, 44, 34, "white", FONT_BOLD), 16, 8)
-        blit(chrome, render_text("·  DOOM E1M1, re-rendered by a diffusion model and graded by its own renderer  ·  every box its own process  ·  the runtime records this picture of itself", 1650, 30, 19, "rgb(160,170,190)", FONT), 214, 18)
+        blit(chrome, render_text("tatolab/streamlib-doom", 430, 40, 26, "white", FONT_BOLD), 16, 12)
+        blit(chrome, render_text("·  DOOM E1M1 rebuilt in LEGO by a diffusion model, graded by its own renderer  ·  every box its own process", 1440, 30, 18, "rgb(160,170,190)", FONT), 456, 18)
         blit(chrome, render_text("LIVE GRAPH  ·  from this node's own /api/graph", 570, 22, 14, "rgb(150,160,180)", FONT_BOLD), 16, 46)
         blit(chrome, render_text("THE GAME  ·  1993, what the phone sees", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 608, 46)
         blit(chrome, render_text("NEURAL RE-RENDER  ·  sd-turbo + ControlNet on the renderer's own depth  ·  its own process", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 1264, 46)

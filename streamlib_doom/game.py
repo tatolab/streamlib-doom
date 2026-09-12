@@ -109,6 +109,7 @@ class Game:
         # The master switch over every machine driver — the planner processor and the built-in
         # autopilot alike. A human taking the controls, or one `control` command, turns it off.
         self.autonomy = True
+        self.mission_anchor = None
         self.style = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
         self.repaint = ""
         self.repaint_count = 0
@@ -894,6 +895,7 @@ class Game:
             did = "handed the controls over — autonomy is off" if not self.autonomy else "gave the controls back to autonomy"
         elif verb == "mission":
             self.mission = str(command.get("goal", "patrol"))
+            self.mission_anchor = (p["x"], p["y"])  # circle and hold are relative to where it stands now
             did = f"set the mission to {self.mission}"
         elif verb == "style":
             self.style = str(command.get("style", "photoreal"))
@@ -907,6 +909,10 @@ class Game:
             name = str(command.get("effect", "none"))
             self.effect = MODES.get(name, 0)
             did = f"set the screen effect to {name}"
+        else:
+            # Say so on the HUD rather than accepting it silently: a command that does nothing
+            # still leaves its processor on the graph, which reads exactly like one that worked.
+            did = f"cannot do '{verb}' — try spawn, give, lights, effect, message, mission, style, repaint, control"
         if did:
             self.director_log.append((self.tick_count, did))
             self.director_log = self.director_log[-8:]
@@ -1080,6 +1086,7 @@ class Game:
             "floors": self.floors.tolist(), "ceilings": self.ceilings.tolist(), "things": things,
             "doors": [[mx, my, s, bool(self.ceilings[s] - self.floors[s] > 56)] for _i, mx, my, s in self.door_lines],
             "mission": self.mission, "control_source": self.control_source,
+            "mission_anchor": list(self.mission_anchor) if self.mission_anchor else None,
             "monster_positions": [[m["x"], m["y"], m["kind"], m["state"] != "idle"] for m in self.monsters if m["alive"]],
             "hud": {
                 "bullets": p["bullets"], "shells": p["shells"], "rockets": p["rockets"], "cells": 0, "health": p["health"], "armor": p["armor"],

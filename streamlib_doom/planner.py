@@ -22,7 +22,10 @@ GOALS: dict[str, list[tuple[float, float]]] = {
     "courtyard": [(2860, -3480)],
     "hangar": [HANGAR_START],
     "hold": [],
+    "circle": [],  # built around wherever the robot stood when the mission was set
 }
+CIRCLE_RADIUS = 224.0
+CIRCLE_POINTS = 8
 MISSIONS = GOALS
 CELL = 16.0
 CLEARANCE = 18.0
@@ -197,6 +200,8 @@ class PlannerMemory:
         self.replan_at = 0
         self.best_remaining = 1e9
         self.progress_tick = 0
+        self.circle: list[tuple[float, float]] = []
+        self.circle_anchor: tuple | None = None
         self.stuck_ticks = 0
         self.escape_until = 0
         self.escape_turn = 0.0
@@ -250,6 +255,13 @@ def plan(world: dict, detections: list[dict], memory: PlannerMemory) -> dict:
     x, y, angle = world["x"], world["y"], world["angle"]
     mission = world.get("mission", "patrol")
     goals = GOALS.get(mission, [])
+    if mission == "circle":
+        anchor = world.get("mission_anchor") or (x, y)
+        if memory.circle_anchor != tuple(anchor):
+            memory.circle_anchor = tuple(anchor)
+            memory.circle = [(anchor[0] + CIRCLE_RADIUS * math.cos(2 * math.pi * i / CIRCLE_POINTS),
+                              anchor[1] + CIRCLE_RADIUS * math.sin(2 * math.pi * i / CIRCLE_POINTS)) for i in range(CIRCLE_POINTS)]
+        goals = memory.circle
     if mission != memory.mission:
         memory.mission, memory.goal_index, memory.route, memory.index = mission, 0, [], 0
         memory.replan_at = 0
@@ -289,7 +301,7 @@ def plan(world: dict, detections: list[dict], memory: PlannerMemory) -> dict:
     if math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_RADIUS:
         if memory.goal_index + 1 < len(goals):
             memory.goal_index += 1
-        elif mission == "patrol":
+        elif mission in ("patrol", "circle"):
             memory.goal_index = 0
         else:
             return controls  # arrived; hold

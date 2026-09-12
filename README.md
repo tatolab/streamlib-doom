@@ -63,8 +63,9 @@ own H.264 encoder — nothing is screen-captured.
 
 The model panes read *no diffusion node yet · add one over MCP* until something adds them,
 because the four networks own most of the GPU and the node does not assume you want them.
-`scripts/neural-setup.py` adds and proves them in about a minute. They are dynamic processors,
-so a node restart leaves them behind — run it again.
+`scripts/neural-setup.py` adds and proves them in about a minute. They are dynamic processors, so a
+node restart leaves them behind; `scripts/neural-setup.py --watch` stays running and puts them back
+whenever the graph comes up without them, which is what the long-lived service runs.
 
 ## Play it on your phone
 

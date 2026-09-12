@@ -59,41 +59,68 @@ def rewire(a, a_port, b, b_port) -> None:
     reel.connect(a, a_port, b, b_port)
 
 
-t0 = time.monotonic()
-for name, type_path, source, sink in NODES:
-    if not has(name):
-        reel.add(type_path, name)
-        time.sleep(0.3)
-    wire(name, source, sink)
-print(f"nodes added and wired in {time.monotonic() - t0:.0f}s; proving flow…", flush=True)
+def main() -> None:
+    t0 = time.monotonic()
+    for name, type_path, source, sink in NODES:
+        if not has(name):
+            reel.add(type_path, name)
+            time.sleep(0.3)
+        wire(name, source, sink)
+    print(f"nodes added and wired in {time.monotonic() - t0:.0f}s; proving flow…", flush=True)
 
-for name, _type, source, sink in NODES:
-    out_port, to, to_port = sink
-    if name == "Repainter":  # publishes only on a repaint; nothing to prove yet
-        continue
-    # 1. The node publishes: else its input link never opened — re-wire it.
-    started = time.monotonic(); rewired = 0
-    while not flowing(name, out_port):
-        waited = time.monotonic() - started
-        if waited > 240:
-            print(f"{name}: NOT publishing after {waited:.0f}s", flush=True); break
-        if waited > 45 * (rewired + 1) and rewired < 4:
-            rewire(source[0], source[1], name, source[2]); rewired += 1
-            print(f"{name}: silent at {waited:.0f}s, re-wired its input ({rewired})", flush=True)
-        time.sleep(1.5)
-    else:
-        print(f"{name}: publishing at {time.monotonic() - t0:.0f}s", flush=True)
-    # 2. The console receives it: else the output link never opened — re-wire that.
-    if to == "Console":
+    for name, _type, source, sink in NODES:
+        out_port, to, to_port = sink
+        if name == "Repainter":  # publishes only on a repaint; nothing to prove yet
+            continue
+        # 1. The node publishes: else its input link never opened — re-wire it.
         started = time.monotonic(); rewired = 0
-        while pane_age(name) > 3.0:
+        while not flowing(name, out_port):
             waited = time.monotonic() - started
-            if waited > 120:
-                print(f"{name}: console never received its pane", flush=True); break
-            if waited > 12 * (rewired + 1) and rewired < 5:
-                rewire(name, out_port, to, to_port); rewired += 1
-                print(f"{name}: pane missing at {waited:.0f}s, re-wired its output ({rewired})", flush=True)
-            time.sleep(1.0)
+            if waited > 240:
+                print(f"{name}: NOT publishing after {waited:.0f}s", flush=True); break
+            if waited > 45 * (rewired + 1) and rewired < 4:
+                rewire(source[0], source[1], name, source[2]); rewired += 1
+                print(f"{name}: silent at {waited:.0f}s, re-wired its input ({rewired})", flush=True)
+            time.sleep(1.5)
         else:
-            print(f"{name}: on the console at {time.monotonic() - t0:.0f}s", flush=True)
-print(f"neural graph live in {time.monotonic() - t0:.0f}s", flush=True)
+            print(f"{name}: publishing at {time.monotonic() - t0:.0f}s", flush=True)
+        # 2. The console receives it: else the output link never opened — re-wire that.
+        if to == "Console":
+            started = time.monotonic(); rewired = 0
+            while pane_age(name) > 3.0:
+                waited = time.monotonic() - started
+                if waited > 120:
+                    print(f"{name}: console never received its pane", flush=True); break
+                if waited > 12 * (rewired + 1) and rewired < 5:
+                    rewire(name, out_port, to, to_port); rewired += 1
+                    print(f"{name}: pane missing at {waited:.0f}s, re-wired its output ({rewired})", flush=True)
+                time.sleep(1.0)
+            else:
+                print(f"{name}: on the console at {time.monotonic() - t0:.0f}s", flush=True)
+    print(f"neural graph live in {time.monotonic() - t0:.0f}s", flush=True)
+
+
+
+
+def watch() -> None:
+    """Keep them there. They are dynamic processors, so a node restart leaves them behind;
+    this notices the graph came back without them and adds them again."""
+    while True:
+        time.sleep(10)
+        try:
+            names = {n["display_name"] for n in reel.graph()["nodes"]}
+        except Exception:
+            continue  # the node is down or restarting; try again shortly
+        missing = [name for name, *_ in NODES if name not in names]
+        if not missing:
+            continue
+        print(f"missing {', '.join(missing)} — the node restarted; adding them back", flush=True)
+        try:
+            main()
+        except Exception as failure:
+            print(f"could not restore: {failure}", flush=True)
+
+
+main()
+if "--watch" in sys.argv:
+    watch()

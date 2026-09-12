@@ -3,7 +3,10 @@ as the hero pane, and a 1920x1080 picture the engine records of itself.
 
     uv run streamlib run -f showcase.py                       # the console, phone-playable, nothing recorded
     STREAMLIB_DOOM_RECORDING=console.mp4 uv run streamlib run -f showcase.py
-    scripts/demo-reel.py                                      # adds the sensors live, brings Claude in, records the reel
+    scripts/neural-setup.py                                   # adds the models over MCP and proves each is delivering
+
+Set STREAMLIB_DOOM_CONSOLE_WHIP_URL to publish the console itself over WebRTC, so the
+dashboard can be watched in a browser from anywhere on the network while someone plays.
 
 The sensors — depth, segmentation, lidar, map — are not declared here. The reel (or
 Claude, or you) adds them to the running graph over MCP and their panes light up.
@@ -54,7 +57,8 @@ def setup(rt: Runtime) -> None:
     rt.connect(perception.output("detections_to_downstream"), telemetry.input("detections_from_upstream"))
 
     whip_url = os.environ.get("STREAMLIB_WHIP_URL")
-    mixer = rt.add(DoomAudioMixer, display_name="Mixer") if (RECORDING_PATH or whip_url) else None
+    console_whip_url = os.environ.get("STREAMLIB_DOOM_CONSOLE_WHIP_URL")
+    mixer = rt.add(DoomAudioMixer, display_name="Mixer") if (RECORDING_PATH or whip_url or console_whip_url) else None
     if whip_url:
         # The phone's WebRTC option, exactly as app.py offers it: the operator's picture and the mix over WHIP.
         from streamlib_webrtc import WhipPublisher
@@ -73,13 +77,30 @@ def setup(rt: Runtime) -> None:
         rt.connect(mixer.output("audio"), whip_opus.input("audio"))
         rt.connect(whip_opus.output("encoded_audio"), publisher.input("tracks"))
 
+    if console_whip_url:
+        # The console itself, live: the same 1920x1080 picture the recorder gets, published over WHIP
+        # so anyone on the network can watch the dashboard in a browser while someone else plays.
+        from streamlib_webrtc import WhipPublisher
+        console_h264 = rt.add(H264Encoder, config={"fps": 60, "keyframe_interval_seconds": 1}, display_name="H264 · Console")
+        console_opus = rt.add(OpusEncoder, config={"bitrate_bps": 96000}, display_name="Opus · Console")
+        console_config = {"url": console_whip_url}
+        if os.environ.get("STREAMLIB_WHIP_BEARER_TOKEN"):
+            console_config["bearer_token"] = os.environ["STREAMLIB_WHIP_BEARER_TOKEN"]
+        console_publisher = rt.add(WhipPublisher, config=console_config, display_name="WHIP · Console")
+        rt.connect(console.output("video"), console_h264.input("video"))
+        rt.connect(console_h264.output("encoded_video"), console_publisher.input("tracks"))
+        if not whip_url:
+            rt.connect(game.output("world_to_downstream"), mixer.input("world_from_upstream"))
+        rt.connect(mixer.output("audio"), console_opus.input("audio"))
+        rt.connect(console_opus.output("encoded_audio"), console_publisher.input("tracks"))
+
     if RECORDING_PATH:
         h264 = rt.add(H264Encoder, config={"fps": 60, "keyframe_interval_seconds": 1}, display_name="H264")
         opus = rt.add(OpusEncoder, config={"bitrate_bps": 128000}, display_name="Opus")
         recorder = rt.add(Mp4Sink, config={"path": RECORDING_PATH}, display_name="MP4")
         rt.connect(console.output("video"), h264.input("video"))
         rt.connect(h264.output("encoded_video"), recorder.input("tracks"))
-        if not whip_url:
+        if not (whip_url or console_whip_url):
             rt.connect(game.output("world_to_downstream"), mixer.input("world_from_upstream"))
         rt.connect(mixer.output("audio"), opus.input("audio"))
         rt.connect(opus.output("encoded_audio"), recorder.input("tracks"))

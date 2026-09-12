@@ -8,7 +8,7 @@ Not a port of the Doom engine. The real E1M1 from the shareware WAD — its geom
 
 <img src="https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.gif" alt="E1M1 rendered by StreamLib" width="640">
 
-[Watch the LEGO reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4) · [the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
+[Watch the LEGO reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4) · [Play it](#play-it-on-your-phone) · [Watch the console live](#watch-the-console-live-while-someone-else-plays) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
 
 </div>
 
@@ -33,6 +33,38 @@ The graph is four processors and three links. The phone is two more links.
 - A phone or laptop on the same network. Any browser from 2023 on; the page uses `DecompressionStream`.
 
 The shareware WAD is downloaded from the Internet Archive on first run and verified by hash. It is id Software's freely redistributable 1993 shareware episode and is not part of this repository.
+
+## Watch the console live, while someone else plays
+
+The console is not only a recording: point it at a WHIP endpoint and the whole 1920×1080
+dashboard — the live graph, the game, the re-render, the sensor strip and the telemetry —
+publishes as H.264 and Opus, so anyone on the network can watch it in a browser while
+someone plays on their phone.
+
+```bash
+# a MediaMTX (or any WHIP/WHEP server) on the same box
+export STREAMLIB_WHIP_URL=http://127.0.0.1:8889/doom/whip             # the game, for the phone's WebRTC option
+export STREAMLIB_DOOM_CONSOLE_WHIP_URL=http://127.0.0.1:8889/console/whip   # the console itself
+uv run streamlib run -f showcase.py
+```
+
+Then, from any device on the network:
+
+| what | where |
+|---|---|
+| play | `http://<LAN address>:8666/` |
+| watch the console, low latency | `http://<LAN address>:8889/console` |
+| watch it on anything, ~5 s behind | `http://<LAN address>:8888/console/index.m3u8` |
+| open it in VLC or ffplay | `rtsp://<LAN address>:8554/console` |
+
+The two publishes are independent: the phone's stream is the 1280×960 game, the console's is
+the dashboard. Both come out of the same graph, from the same frames, encoded by the engine's
+own H.264 encoder — nothing is screen-captured.
+
+The model panes read *no diffusion node yet · add one over MCP* until something adds them,
+because the four networks own most of the GPU and the node does not assume you want them.
+`scripts/neural-setup.py` adds and proves them in about a minute. They are dynamic processors,
+so a node restart leaves them behind — run it again.
 
 ## Play it on your phone
 

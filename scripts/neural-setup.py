@@ -13,22 +13,32 @@ reel = importlib.util.module_from_spec(spec); spec.loader.exec_module(reel)
 
 # Which re-render fills the neural pane. `video` is the causal video model (StreamDiffusionV2);
 # `sdturbo` is the per-frame image model with the reprojected feedback loop.
-RERENDER = os.environ.get("STREAMLIB_DOOM_RERENDER", "sdturbo")
+RERENDER = os.environ.get("STREAMLIB_DOOM_RERENDER", "off")
 RERENDER_TYPES = {"sdturbo": "streamlib_doom.neural:DiffusionRerender",
                   "video": "streamlib_doom.streamdiffusion:VideoDiffusionRerender"}
-if RERENDER not in RERENDER_TYPES:
-    raise SystemExit(f"STREAMLIB_DOOM_RERENDER must be one of {sorted(RERENDER_TYPES)}, not {RERENDER!r}")
+if RERENDER not in ({"off"} | set(RERENDER_TYPES)):
+    raise SystemExit(f"STREAMLIB_DOOM_RERENDER must be off, {' or '.join(sorted(RERENDER_TYPES))}, not {RERENDER!r}")
+
+# The re-render is off by default. Stable diffusion has very little to work with at 320x200 and
+# the result reads as mush; set STREAMLIB_DOOM_RERENDER=sdturbo or =video to put it back in.
+RERENDER_ENABLED = RERENDER in ("sdturbo", "video")
 
 NODES = [  # name, type, (from, from_port) input, (to, to_port) output
     ("Lidar", "streamlib_doom.sensors:LidarScanner", ("Game", "world_to_downstream", "world_from_upstream"), ("scan_to_downstream", None, None)),
     ("Map", "streamlib_doom.sensors:OccupancyMapper", ("Lidar", "scan_to_downstream", "scan_from_upstream"), ("map_to_downstream", "Console", "map_from_upstream")),
     # The finished frame, not the bare view: it carries the weapon and the status bar, and the HUD
     # compositor marks those pixels with their own class so the re-render leaves them alone.
-    ("Diffusion", RERENDER_TYPES[RERENDER], ("HUD", "frame_to_downstream", "view_from_upstream"), ("neural_to_downstream", "Console", "neural_from_upstream")),
+    ("Substitute", "streamlib_doom.models:MonsterModelSubstitution", ("HUD", "frame_to_downstream", "view_from_upstream"), ("substitute_to_downstream", "Console", "neural_from_upstream")),
     ("DepthNet", "streamlib_doom.neural:NeuralDepth", ("Render", "view_to_downstream", "view_from_upstream"), ("depth_trio_to_downstream", "Console", "depth_trio_from_upstream")),
     ("Detector", "streamlib_doom.neural:MonsterDetector", ("Render", "view_to_downstream", "view_from_upstream"), ("detector_pane_to_downstream", "Console", "detector_from_upstream")),
     ("Repainter", "streamlib_doom.neural:Repainter", ("Game", "world_to_downstream", "world_from_upstream"), ("patches_to_downstream", "Render", "atlas_patch_from_upstream")),
 ]
+
+
+if RERENDER_ENABLED:
+    NODES.append(("Diffusion", RERENDER_TYPES[RERENDER], ("HUD", "frame_to_downstream", "view_from_upstream"),
+                  ("neural_to_downstream", "Console", "neural_from_upstream")))
+EXTRA_LINKS = [("Game", "world_to_downstream", "Substitute", "world_from_upstream")]
 
 
 def has(name):
@@ -47,10 +57,13 @@ def wire(name, source, sink):
     out_port, to, to_port = sink
     if to and reel.link_id(name, to, to_port) is None:
         reel.connect(name, out_port, to, to_port)
+    for a, a_port, b, b_port in EXTRA_LINKS:
+        if b == name and reel.link_id(a, b, b_port) is None:
+            reel.connect(a, a_port, b, b_port)
 
 
 PANES_URL = os.environ.get("STREAMLIB_DOOM_PANES_URL", "http://127.0.0.1:8669/panes")
-CONSOLE_PANE = {"Map": "map", "Diffusion": "neural", "DepthNet": "depth_trio", "Detector": "detector"}
+CONSOLE_PANE = {"Map": "map", "Substitute": "neural", "Diffusion": "neural", "DepthNet": "depth_trio", "Detector": "detector"}
 
 
 def pane_age(name) -> float:

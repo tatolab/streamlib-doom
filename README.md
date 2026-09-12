@@ -91,6 +91,30 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 ```
 
 
+## The monsters, swapped for something else, tracked live
+
+The renderer already writes what every pixel is and how far away it is, and the game already
+publishes where every monster stands. That is everything needed to put something else there:
+`streamlib_doom/models.py` marches a signed distance field of a robot at each monster's own world
+position in a compute kernel, scales it by range, and depth-tests it against the renderer's depth
+channel so a wall in front still hides it. The original sprite is painted out with the wall behind
+it first. No model is loaded and no network runs — one GPU kernel on data the graph was already
+carrying, at 30 Hz, tracking whatever the game does.
+
+### The diffusion re-render is off by default
+
+It stays in the tree and one environment variable brings it back:
+
+```shell
+STREAMLIB_DOOM_RERENDER=sdturbo scripts/neural-setup.py   # sd-turbo with two ControlNets
+STREAMLIB_DOOM_RERENDER=video   scripts/neural-setup.py   # StreamDiffusionV2, a causal video model
+```
+
+It is off because a 320x200 palette frame gives a diffusion model very little to build on, and the
+result reads as mush however it is tuned. Everything below is what was learned trying, and it all
+still applies to a source with real detail in it — a camera, or a 1080p video — where the same
+pipeline looks far better. Left in for anyone who wants to play with it.
+
 ## One graph, three worlds — LEGO, neon, and whatever Claude picks
 
 <a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-worlds.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/worlds-cyberpunk.png" alt="the same corridor as LEGO, as blade runner neon, and as stained glass" width="900"></a>

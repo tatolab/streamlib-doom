@@ -75,7 +75,11 @@ uv sync                          # streamlib comes from tatolab's wheel index
 uv run streamlib run             # boots the node; the first run fetches the WAD
 ```
 
-Then open `http://<this machine's LAN address>:8666/` on your phone and tap the screen. Left pad moves and strafes, right pad drags to turn, FIRE shoots, USE opens doors and flips the exit switch, WPN swaps to the shotgun once you've picked it up in the courtyard. When you die, FIRE restarts. On a laptop: WASD, arrows, space, E.
+Then open `http://<this machine's LAN address>:8666/` on your phone and tap the screen. The moment you
+touch the controls the marine is yours and stays yours — through every pause to aim, wait out a door or
+read the room — until you put the phone down for half a minute or hand it back with
+`{"command":"control","mode":"auto"}`. `{"command":"control","mode":"stop"}` switches every machine
+driver off, the planner and the built-in autopilot alike. Left pad moves and strafes, right pad drags to turn, FIRE shoots, USE opens doors and flips the exit switch, WPN swaps to the shotgun once you've picked it up in the courtyard. When you die, FIRE restarts. On a laptop: WASD, arrows, space, E.
 
 Ports: 8666 serves the page and frames, 8667 takes controls, 9200 is the node's own control plane and MCP endpoint.
 

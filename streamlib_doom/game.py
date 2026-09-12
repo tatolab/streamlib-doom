@@ -106,6 +106,9 @@ class Game:
         self.tick_count = 0
         self.mission = "patrol"
         self.control_source = "autonomy"
+        # The master switch over every machine driver — the planner processor and the built-in
+        # autopilot alike. A human taking the controls, or one `control` command, turns it off.
+        self.autonomy = True
         self.style = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
         self.repaint = ""
         self.repaint_count = 0
@@ -280,7 +283,7 @@ class Game:
             self._tick_sectors()
             self._decay_counters()
             return
-        if self.autopilot and not any(controls.get(k) for k in ("forward", "strafe", "turn", "fire", "use")):
+        if self.autopilot and self.autonomy and not any(controls.get(k) for k in ("forward", "strafe", "turn", "fire", "use")):
             self.autopilot_t += 1.0 / TICRATE
             if self.autopilot_t < script.DEMO_SECONDS:
                 controls = self._scripted_controls()
@@ -881,7 +884,14 @@ class Game:
             did = "healed the player"
         elif verb == "autopilot":
             self.autopilot = bool(command.get("on", True))
-            did = "autopilot " + ("on" if self.autopilot else "off")
+            self.autonomy = self.autopilot  # "autopilot off" is what an agent reaches for to stop everything
+            did = "autopilot " + ("on" if self.autopilot else "off, and every machine driver with it")
+        elif verb == "control":
+            mode = str(command.get("mode", "auto"))
+            self.autonomy = mode in ("auto", "autonomy", "resume")
+            if not self.autonomy:
+                self.autopilot = False
+            did = "handed the controls over — autonomy is off" if not self.autonomy else "gave the controls back to autonomy"
         elif verb == "mission":
             self.mission = str(command.get("goal", "patrol"))
             did = f"set the mission to {self.mission}"
@@ -1086,6 +1096,6 @@ class Game:
                 "monsters_awake": sum(1 for m in self.monsters if m["alive"] and m["state"] != "idle"),
                 "lights": self.light_factor, "god": bool(p.get("god")), "autopilot": self.autopilot, "effect": self.effect,
                 "director_log": [text for _t, text in self.director_log],
-                "mission": self.mission, "control_source": self.control_source, "style": self.style, "repaint": self.repaint,
+                "mission": self.mission, "control_source": self.control_source, "autonomy": self.autonomy, "style": self.style, "repaint": self.repaint,
             },
         }

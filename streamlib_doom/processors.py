@@ -35,6 +35,7 @@ GAME_PREFIXES = sorted(set(DEMO_PREFIXES) | {"BAL1", "BLUD", "PUFF", "BEXP", "AR
 
 # ---------------------------------------------------------------------------
 TIC_NS = 1_000_000_000 // TICRATE
+TELEOP_HOLD_NS = int(float(os.environ.get("STREAMLIB_DOOM_TELEOP_HOLD_S", "30")) * 1_000_000_000)
 
 
 @processor(execution="continuous", interval_ms=10)
@@ -57,8 +58,11 @@ class DoomGame:
         self.clients = 0
         self.frames = 0
         self.next_tick_ns = 0
-        # A phone touching the screen owns the marine for 700 ms; otherwise a planner on the link does.
-        self.last_touch_ns = 0
+        # A hand on the controls owns the marine, and keeps owning it through every pause to aim,
+        # wait for a door or read the room — 700 ms of stillness used to hand the marine back to
+        # the planner mid-move, which felt like fighting it. It hands back when the player leaves,
+        # after TELEOP_HOLD_NS of no input at all, or on one `control` command.
+        self.teleop_until_ns = 0
         self.planner_controls: dict | None = None
         self.planner_ns = 0
 
@@ -71,7 +75,7 @@ class DoomGame:
         def on_message(message: dict) -> None:
             with self.lock:
                 if any(message.get(key) for key in ("f", "s", "t", "fire", "use", "w")):
-                    self.last_touch_ns = clock.monotonic_now_ns()
+                    self.teleop_until_ns = clock.monotonic_now_ns() + TELEOP_HOLD_NS
                 self.controls["forward"] = float(message.get("f", 0.0))
                 self.controls["strafe"] = float(message.get("s", 0.0))
                 self.turn_accumulated += float(message.get("t", 0.0))
@@ -85,6 +89,7 @@ class DoomGame:
             if self.clients <= 0:
                 with self.lock:
                     self.controls.update(forward=0.0, strafe=0.0, fire=0, use=0)
+                    self.teleop_until_ns = 0  # nobody is holding it; autonomy may resume
 
         wsserver.serve_controls(CONTROLS_PORT, on_message, on_client_change)
         _log("GAME_SETUP", controls_port=CONTROLS_PORT, director_port=DIRECTOR_PORT, monsters=len(self.game.monsters))
@@ -163,6 +168,8 @@ class DoomGame:
                 break
             command.setdefault("nonce", "http-" + str(clock.monotonic_now_ns()))
             did = self.game.director(command)
+            if self.game.autonomy and command.get("command") in ("control", "autopilot", "mission"):
+                self.teleop_until_ns = 0  # asked for autonomy back; stop waiting out the hold
             if did:
                 _log("DIRECTOR", did=did, via="http")
         while True:
@@ -172,9 +179,9 @@ class DoomGame:
             self.planner_controls, self.planner_ns = planned, now
         ticked = 0
         while now >= self.next_tick_ns and ticked < 4:
-            touching = now - self.last_touch_ns < 700_000_000
-            planning = self.planner_controls is not None and now - self.planner_ns < 500_000_000
-            if planning and not touching:
+            teleop = now < self.teleop_until_ns
+            planning = self.game.autonomy and self.planner_controls is not None and now - self.planner_ns < 500_000_000
+            if planning and not teleop:
                 controls = {key: self.planner_controls.get(key, 0) for key in ("forward", "strafe", "turn", "fire", "use", "weapon")}
                 self.planner_controls["use"] = 0  # one plan, one press
                 self.planner_controls["weapon"] = 0
@@ -185,7 +192,7 @@ class DoomGame:
                     controls["turn"] = self.turn_accumulated
                     self.turn_accumulated = 0.0
                     self.controls["weapon"] = 0
-                self.game.control_source = "teleop" if touching else ("autopilot" if self.game.autopilot else "idle")
+                self.game.control_source = "teleop" if teleop else ("autopilot" if (self.game.autopilot and self.game.autonomy) else ("idle" if self.game.autonomy else "manual"))
             self.game.tick(controls)
             self.next_tick_ns += TIC_NS
             ticked += 1

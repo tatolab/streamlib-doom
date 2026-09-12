@@ -747,7 +747,7 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 
 REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
 PANES_PORT = int(os.environ.get("STREAMLIB_DOOM_PANES_PORT", "8669"))
-BADGES = ("AUTONOMY  ·  the planner drives, from its own camera", "TELEOP  ·  a phone is driving over WebSocket", "IDLE  ·  waiting for a hand or a plan")
+BADGES = ("AUTONOMY  ·  the planner drives, from its own camera", "TELEOP  ·  a hand has the controls; autonomy waits", "MANUAL  ·  autonomy is off, the controls are yours")
 BADGE_W = 640
 
 

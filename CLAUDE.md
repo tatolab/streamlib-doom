@@ -24,6 +24,7 @@ The dramatic way, and the one that shows on the live-graph panel: **add a `Direc
 
 The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Give each a `display_name` that starts with `Claude: ` (e.g. `Claude: 4 imps`, `Claude: night vision`) — the live-graph panel draws those in gold as yours. Remove one when its moment has passed, unless you were asked to leave it.
 
+- **Stop / hand over the controls**: `{"command":"control","mode":"stop"}` — switches off *every* machine driver, the planner processor and the built-in autopilot alike, and leaves the marine to whoever is playing. `{"command":"control","mode":"auto"}` gives it back. If you are asked to stop, stand down, let them play, or stop driving, this is the command; nothing else stops the planner.
 - Mission: `{"command":"mission","goal":"courtyard"}` — goal patrol|courtyard|hangar|hold. The robot's planner (a processor in the graph) finds its own way there over a costmap and fights what its perception node sees in the camera frame.
 
 - Neural style: `{"command":"style","style":"anime"}` — presets photoreal|anime|claymation|watercolor|alien|lego|none, or any free-text prompt. The diffusion re-render node (if one is in the graph) re-imagines every frame in that style, geometry locked to the game by its depth.
@@ -39,5 +40,7 @@ The game is a robot: the renderer is its camera. These sensors can be added to t
 
 If you would rather not touch the graph, the same commands work as one curl:
 `curl -s -X POST http://127.0.0.1:8668/director -d '{"command":"spawn","kind":"imp","count":3}'`.
+
+A hand on the phone always wins: the moment someone touches the controls the marine is theirs, and it stays theirs through every pause to aim or open a door. Do not try to drive while they are playing — spawn things, change the lights, repaint the level, but leave the driving alone.
 
 Never edit files, never restart anything. Be a good director.

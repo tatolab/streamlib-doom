@@ -55,3 +55,24 @@ def test_every_effect_builds_a_full_256_entry_remap():
     table = build_all_remaps(Wad())
     assert table.shape == (max(MODES.values()) + 1, 256)
     assert set(int(v) for v in table[MODES["night_vision"]]) != {0}, "night vision remaps to real indices"
+
+
+def test_control_stop_switches_every_machine_driver_off(game):
+    game.director({"command": "autopilot", "on": True, "nonce": "a"})
+    assert game.autopilot and game.autonomy
+    assert game.director({"command": "control", "mode": "stop", "nonce": "s"}) is not None
+    assert not game.autonomy and not game.autopilot, "stop must stop the planner and the autopilot alike"
+    # With autonomy off the built-in autopilot never writes controls, whatever its own flag says.
+    game.autopilot = True
+    before = (game.player["x"], game.player["y"])
+    for _ in range(35):
+        game.tick({})
+    assert (round(game.player["x"]), round(game.player["y"])) == (round(before[0]), round(before[1])), "it moved with autonomy off"
+    assert game.director({"command": "control", "mode": "auto", "nonce": "r"}) is not None
+    assert game.autonomy
+
+
+def test_autopilot_off_also_stops_the_planner(game):
+    game.director({"command": "autopilot", "on": True, "nonce": "on"})
+    game.director({"command": "autopilot", "on": False, "nonce": "off"})
+    assert not game.autonomy, "an agent told to stop reaches for autopilot off; it must mean it"

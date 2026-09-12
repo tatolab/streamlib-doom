@@ -22,10 +22,12 @@ from .wad import Wad
 VIEW_W, VIEW_H = 320, 200
 NEURAL_W, NEURAL_H = 512, 320
 RING_USAGE = ["texture_binding", "storage_binding"]
-# The four models share one GPU with a 60 fps game; these rates keep its budget under one second per second.
-DIFFUSION_FPS = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_FPS", "8"))
+# The four models share one GPU with a 60 fps game, so each takes a slice of one second per
+# second: the re-render is the picture people watch, so it gets most of it.
+DIFFUSION_FPS = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_FPS", "12"))
 DEPTH_FPS = float(os.environ.get("STREAMLIB_DOOM_NEURAL_DEPTH_FPS", "4"))
-DETECTOR_FPS = float(os.environ.get("STREAMLIB_DOOM_DETECTOR_FPS", "2"))
+DETECTOR_FPS = float(os.environ.get("STREAMLIB_DOOM_DETECTOR_FPS", "1.5"))
+COMPILE = os.environ.get("STREAMLIB_DOOM_COMPILE", "1") == "1"
 HF_MODELS = {
     "diffusion": "stabilityai/sd-turbo",
     "controlnet": "thibaud/controlnet-sd21-depth-diffusers",
@@ -123,20 +125,46 @@ class DiffusionRerender(_NeuralBase):
         self.pipe.vae = AutoencoderTiny.from_pretrained(HF_MODELS["vae"], torch_dtype=torch.float16).to("cuda")
         self.pipe.set_progress_bar_config(disable=True)
         self.generator = torch.Generator("cuda").manual_seed(7)
-        self.prompt_cache: dict = {}
+        # These models are launch-bound at this size — the UNet costs the same on 64x40 latents
+        # as on 44x28 — so the wins are not resolution: encode each prompt once, and let inductor
+        # replay the step as a CUDA graph.
+        self.embeds: dict = {}
+        self.compiled = False
+        self.rate = 0.0
         self.style = "photoreal"
         self.strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_STRENGTH", "0.68"))
         self.steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_STEPS", "2"))
-        # Warm the pipeline so the first live frame is not the slow one.
+        if COMPILE:
+            import torch._inductor.config as inductor_config
+            inductor_config.triton.cudagraph_trees_generation_cloning = "user_visible"
+            self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
+            self.pipe.controlnet = torch.compile(self.pipe.controlnet, mode="reduce-overhead", fullgraph=True)
+            self.pipe.vae.decoder = torch.compile(self.pipe.vae.decoder, mode="reduce-overhead", fullgraph=True)
+            self.compiled = True
+        # Warm the pipeline so the first live frame is not the slow one; compiling happens here too.
+        started = time.monotonic()
         blank = torch.zeros((1, 3, NEURAL_H, NEURAL_W), dtype=torch.float16, device="cuda")
-        self._run(blank, blank, STYLES["photoreal"])
-        log.info("MARKER:DIFFUSION_READY")
+        for _ in range(3 if COMPILE else 1):
+            self._run(blank, blank, STYLES["photoreal"])
+        log.info(f"MARKER:DIFFUSION_READY compiled={self.compiled} warmup_s={time.monotonic() - started:.0f}")
+
+    def _prompt_embeds(self, prompt: str):
+        """The text encoder costs 7 ms a frame and the prompt only changes when Claude does."""
+        if prompt not in self.embeds:
+            with self.torch.inference_mode():
+                self.embeds[prompt] = self.pipe.encode_prompt(prompt, "cuda", 1, False)[0]
+            if len(self.embeds) > 24:
+                self.embeds.pop(next(iter(self.embeds)))
+        return self.embeds[prompt]
 
     def _run(self, init, control, prompt: str):
+        embeds = self._prompt_embeds(prompt)
+        if self.compiled:
+            self.torch.compiler.cudagraph_mark_step_begin()
         with self.torch.inference_mode():
-            out = self.pipe(prompt=prompt, image=init, control_image=control, num_inference_steps=self.steps, strength=self.strength,
+            out = self.pipe(prompt_embeds=embeds, image=init, control_image=control, num_inference_steps=self.steps, strength=self.strength,
                             guidance_scale=0.0, controlnet_conditioning_scale=0.9, generator=self.generator, output_type="pt").images[0]
-        return out
+        return out.clone() if self.compiled else out
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         view = ctx.inputs.read("view_from_upstream")
@@ -158,7 +186,9 @@ class DiffusionRerender(_NeuralBase):
         out = self._run(init, control, prompt)
         image = (out.clamp(0, 1) * 255).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
         self.ms = (time.monotonic() - started) * 1000
-        self._publish(ctx, image, "neural_to_downstream", {"style": style, "prompt": prompt[:80], "model": "sd-turbo + controlnet-depth", "tick": view.get("tick")})
+        self.rate = 0.9 * self.rate + 0.1 * (1000.0 / max(self.ms, 1.0))
+        self._publish(ctx, image, "neural_to_downstream", {"style": style, "prompt": prompt[:80], "model": "sd-turbo + controlnet-depth", "tick": view.get("tick"),
+                                                            "fps": round(min(self.rate, DIFFUSION_FPS), 1)})
         self.frames += 1
         if self.frames in (1, 30, 300):
             log.info(f"MARKER:DIFFUSION_FRAME frames={self.frames} ms={self.ms:.0f} path={self.path} style={style}")

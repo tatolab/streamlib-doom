@@ -629,7 +629,7 @@ class TelemetryPanel(_PanelPublisher):
             row("gpu", f"{self.gpu['util']:3.0f}% busy · {self.gpu['used_gb']:.1f} of {self.gpu['total_gb']:.0f} GB", "rgb(255,160,120)" if self.gpu["util"] > 85 else "rgb(225,230,240)")
         models = (self.witness or {}).get("models") or {}
         if models.get("neural"):
-            row("diffusion", f"{models['neural'].get('ms', 0):.0f} ms · {models['neural'].get('style', '')[:16]}", "rgb(255,200,120)")
+            row("diffusion", f"{models['neural'].get('ms', 0):.0f} ms · {models['neural'].get('fps', 0):.0f} fps · {models['neural'].get('style', '')[:10]}", "rgb(255,200,120)")
         if models.get("depth_trio"):
             row("depth net", f"{models['depth_trio'].get('ms', 0):.0f} ms · abs rel {100 * models['depth_trio'].get('abs_rel', 0):.1f}%", "rgb(255,200,120)")
         if models.get("detector"):
@@ -926,7 +926,7 @@ class ConsoleCompositor:
                 if bag is not None:
                     panes[name] = {"surface_id": bag.get("surface_id"), "pid": bag.get("pid"), "source_surface_id": bag.get("source_surface_id")}
                     if "ms" in bag:
-                        models[name] = {k: bag[k] for k in ("ms", "style", "abs_rel", "hit_rate", "false_alarms", "model", "path") if k in bag}
+                        models[name] = {k: bag[k] for k in ("ms", "fps", "style", "abs_rel", "hit_rate", "false_alarms", "model", "path") if k in bag}
             fps = 0.0
             if len(self.fps_window) > 5:
                 fps = (len(self.fps_window) - 1) / max(self.fps_window[-1] - self.fps_window[0], 1e-6)

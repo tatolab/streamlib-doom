@@ -62,7 +62,7 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 
 Four neural networks, each its own process on the same GPU, all reading the renderer's frame through the surface's DLPack door — one engine-side blit to a CUDA tensor, no CPU hop — while the game keeps rendering at 60 fps beside them:
 
-- **A diffusion re-render.** sd‑turbo with a depth ControlNet, one step per frame. The renderer already writes log depth into the view's green channel, so the ControlNet's conditioning costs nothing and the picture is re-imagined in any style with its geometry locked to the game. Claude picks the styles as free-text prompts and applies them over MCP; every frame follows. About 8 frames a second on an RTX 3090 beside everything else.
+- **A diffusion re-render.** sd‑turbo with a depth ControlNet, one step per frame. The renderer already writes log depth into the view's green channel, so the ControlNet's conditioning costs nothing and the picture is re-imagined in any style with its geometry locked to the game. Claude picks the styles as free-text prompts and applies them over MCP; every frame follows. About 12 frames a second on an RTX 3090 beside everything else — counted in the recording itself, the pane carries 11.5 new frames a second.
 - **A depth network, graded against truth.** Depth Anything V2 on the RGB, aligned to the renderer's true depth in log space, with the abs‑rel error on screen every frame. Ten to twenty percent, typically.
 - **A detector, graded against labels.** Grounding DINO asked for monsters, scored live against the renderer's own per-pixel labels: green is what it found, red is what it missed. Mid-reel its detections replace the oracle on the planner's link, and the robot fights from a learned detector.
 - **A repainter.** New wall and floor textures generated for a material Claude names, contrast-stretched and Floyd–Steinberg dithered into the 1993 palette, then written into the atlas the running renderer samples — the level changes under your feet, and the diffusion view follows.
@@ -74,7 +74,9 @@ scripts/neural-setup.py                   # adds the four models and the lidar m
 scripts/demo-reel-neural.py               # the reel: Claude chooses the looks and the material
 ```
 
-The GPU sits near 100% with all four models running; the models pace themselves (diffusion 8 Hz, depth 4 Hz, detector 2 Hz) so the game's renderer keeps 60 fps and the console around 50. The telemetry pane shows the GPU load, each model's frame time and score, and the console's own rate, so the picture never claims more than it measures.
+The models pace themselves — diffusion 12 Hz, depth 4 Hz, detector 1.5 Hz — so the game's renderer keeps 60 fps and the console around 48 while the GPU sits between 60 and 80 percent. The telemetry pane shows the GPU load, each model's frame time and score, and the console's own rate, so the picture never claims more than it measures.
+
+At this size these models are launch-bound, not compute-bound: the UNet costs the same on 64×40 latents as on 44×28, so shrinking the picture buys nothing. What does: encoding each prompt once instead of every frame (it only changes when Claude does), and letting inductor replay the denoising step as a CUDA graph. Together those took a re-render frame from 98 ms to 52 ms under full load, and the depth network from 36 ms to 25.
 
 ## The robot console: sensors, autonomy, and Claude, all live
 

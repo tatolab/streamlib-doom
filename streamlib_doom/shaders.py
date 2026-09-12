@@ -49,8 +49,12 @@ int light_map(float light, float dist) {
 int shade(int map_index, int palette_index) {
     return int(texelFetch(colormap, ivec2(palette_index, map_index), 0).r * 255.0 + 0.5);
 }
-void put(int col, int y, int index) {
-    imageStore(view_image, ivec2(col, y), vec4(float(index) / 255.0, 0.0, 0.0, 1.0));
+// The view is rgba8: r is the palette index the compositor reads, g is depth on a log
+// scale (4 map units at 0, 1024 at 255, sky at 255), b is the surface class
+// (0 sky, 1 wall, 2 floor, 3 ceiling, 4 monster, 5 pickup, 6 decoration, 7 projectile).
+float depth_code(float dist) { return clamp(log2(max(dist, 4.0) / 4.0) / 8.0, 0.0, 1.0); }
+void put(int col, int y, int index, float dist, int kind) {
+    imageStore(view_image, ivec2(col, y), vec4(float(index) / 255.0, depth_code(dist), float(kind) / 255.0, 1.0));
 }
 
 void draw_plane(int col, vec2 P, float ez, vec2 d, float row_top, float row_bottom, float plane_height,
@@ -63,7 +67,7 @@ void draw_plane(int col, vec2 P, float ez, vec2 d, float row_top, float row_bott
         int sky_x = int(ray_angle / TWO_PI * 1024.0) & 255;
         for (int y = y0; y < y1; y++) {
             int sky_y = clamp(y, 0, 127);
-            put(col, y, atlas_index(int(pc.sky_entry), sky_x, sky_y));
+            put(col, y, atlas_index(int(pc.sky_entry), sky_x, sky_y), 1.0e9, 0);
             depth_of_row[y] = 1.0e9;
         }
         return;
@@ -75,7 +79,7 @@ void draw_plane(int col, vec2 P, float ez, vec2 d, float row_top, float row_bott
         vec2 world = P + d * dist;
         int tx = int(floor(world.x)) & 63;
         int ty = int(floor(-world.y)) & 63;
-        put(col, y, shade(light_map(light, dist), atlas_index(flat_entry, tx, ty)));
+        put(col, y, shade(light_map(light, dist), atlas_index(flat_entry, tx, ty)), dist, plane_height < ez ? 2 : 3);
         depth_of_row[y] = dist;
     }
 }
@@ -93,7 +97,7 @@ void draw_wall(int col, float ez, float scale, float row_top, float row_bottom, 
         float world_h = ez + (CENTER_Y - (float(y) + 0.5)) / scale;
         int ty = positive_mod(int(floor(tex_top_world - world_h)), h);
         if (atlas_alpha(entry, tx, ty) == 0) continue;
-        put(col, y, shade(map_index, atlas_index(entry, tx, ty)));
+        put(col, y, shade(map_index, atlas_index(entry, tx, ty)), dist, 1);
         depth_of_row[y] = dist;
     }
 }
@@ -108,7 +112,7 @@ void main() {
     float s = (float(col) + 0.5 - 160.0) / FOCAL;
     vec2 d = f + r * s;
 
-    for (int y = 0; y < SCREEN_H; y++) { depth_of_row[y] = 1.0e9; put(col, y, 0); }
+    for (int y = 0; y < SCREEN_H; y++) { depth_of_row[y] = 1.0e9; put(col, y, 0, 1.0e9, 0); }
 
     float hit_t[MAX_HITS]; float hit_u[MAX_HITS]; int hit_line[MAX_HITS];
     int hits = 0;
@@ -206,7 +210,7 @@ void main() {
     int things = int(pc.thing_count);
     for (int n = 0; n < things; n++) {
         vec4 t0 = texelFetch(dynamic, ivec2(2 * n, 0), 0);      // x, y, z, entry
-        vec4 t1 = texelFetch(dynamic, ivec2(2 * n + 1, 0), 0);  // mirrored, light, fullbright, 0
+        vec4 t1 = texelFetch(dynamic, ivec2(2 * n + 1, 0), 0);  // mirrored, light, fullbright, class
         vec2 rel = t0.xy - P;
         float depth = dot(rel, f);
         if (depth < 4.0) continue;
@@ -231,7 +235,7 @@ void main() {
             int ty = int((float(y) + 0.5 - row_top) / scale);
             if (ty < 0 || ty >= h) continue;
             if (atlas_alpha(entry, tx, ty) == 0) continue;
-            put(col, y, shade(map_index, atlas_index(entry, tx, ty)));
+            put(col, y, shade(map_index, atlas_index(entry, tx, ty)), depth, int(t1.w));
         }
     }
 }

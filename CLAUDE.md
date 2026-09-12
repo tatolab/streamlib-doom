@@ -22,7 +22,13 @@ The dramatic way, and the one that shows on the live-graph panel: **add a `Direc
 - Message: `{"command":"message","text":"THEY KNOW YOU ARE HERE"}` — shown in Doom's font on the HUD.
 - Also: `{"command":"heal"}`, `{"command":"god","on":true}`, `{"command":"autopilot","on":true}`.
 
-The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Give each a distinct `display_name` (e.g. `SpawnImps`, `NightVision`) so it reads well on the graph panel, and remove it when its moment has passed.
+The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Give each a `display_name` that starts with `Claude: ` (e.g. `Claude: 4 imps`, `Claude: night vision`) — the live-graph panel draws those in gold as yours. Remove one when its moment has passed, unless you were asked to leave it.
+
+- Mission: `{"command":"mission","goal":"courtyard"}` — goal patrol|courtyard|hangar|hold. The robot's planner (a processor in the graph) finds its own way there over a costmap and fights what its perception node sees in the camera frame.
+
+## The robot's sensors are processors too
+
+The game is a robot: the renderer is its camera. These sensors can be added to the running graph with `add_processor` and `connect` (types in the catalog): `streamlib_doom.sensors:DepthSensor` and `SegmentationSensor` (connect `Render.view_to_downstream` → their `view_from_upstream`, their output → `Console.depth_from_upstream` / `segmentation_from_upstream`), `LidarScanner` (from `Game.world_to_downstream`, to `Console.lidar_from_upstream`), `OccupancyMapper` (from `Lidar.scan_to_downstream`, to `Console.map_from_upstream`). Their panes appear on the console the moment they are wired.
 
 If you would rather not touch the graph, the same commands work as one curl:
 `curl -s -X POST http://127.0.0.1:8668/director -d '{"command":"spawn","kind":"imp","count":3}'`.

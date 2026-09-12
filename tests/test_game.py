@@ -62,3 +62,14 @@ def test_monsters_wake_on_sight_and_the_level_restarts_after_death(game):
     for _ in range(TICRATE + 2):
         game.tick({"fire": 1})
     assert not game.player["dead"] and game.player["health"] == 100
+
+
+def test_the_tick_counter_survives_a_restart_so_sounds_after_a_death_still_replay(game):
+    for _ in range(40):
+        game.tick({})
+    before = game.tick_count
+    game._damage_player(1000, None)
+    assert game.player["dead"]
+    game.tick({"fire": 1})  # FIRE restarts the level
+    game.tick({})
+    assert game.tick_count > before, "a restart must not rewind the tick the sound log is replayed by"

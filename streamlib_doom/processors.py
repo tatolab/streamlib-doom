@@ -5,18 +5,17 @@ the game, frames out over another from the compositor's 8-bit framebuffer.
 from __future__ import annotations
 
 import json
+import math
 import os
+import queue as _queue
 import socket
 import struct
 import threading
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy
-
-import queue as _queue
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from streamlib import ProcessorOutputTextureRing, RuntimeContextFullAccess, RuntimeContextLimitedAccess, clock, input, log, output, processor
 
@@ -25,6 +24,7 @@ from . import synth
 from . import wsserver
 from .demo_processors import _Shared, _log, _video_bag, _write_floats, RING_USAGE, VIEW_W, VIEW_H, SPRITE_PREFIXES as DEMO_PREFIXES
 from .game import Game, TICRATE, WEAPON_SHOTGUN
+from .game import THING_CLASS_DECORATION
 from .wad import Wad
 
 CONTROLS_PORT = 8667
@@ -47,6 +47,9 @@ class DoomGame:
     @input(delivery_profile="ordered")
     def director_from_upstream(self) -> None: ...
 
+    @input(delivery_profile="ordered")
+    def controls_from_upstream(self) -> None: ...
+
     def __init__(self) -> None:
         self.controls = {"forward": 0.0, "strafe": 0.0, "turn": 0.0, "fire": 0, "use": 0, "weapon": 0}
         self.turn_accumulated = 0.0
@@ -54,6 +57,10 @@ class DoomGame:
         self.clients = 0
         self.frames = 0
         self.next_tick_ns = 0
+        # A phone touching the screen owns the marine for 700 ms; otherwise a planner on the link does.
+        self.last_touch_ns = 0
+        self.planner_controls: dict | None = None
+        self.planner_ns = 0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         wad = Wad()
@@ -63,6 +70,8 @@ class DoomGame:
 
         def on_message(message: dict) -> None:
             with self.lock:
+                if any(message.get(key) for key in ("f", "s", "t", "fire", "use", "w")):
+                    self.last_touch_ns = clock.monotonic_now_ns()
                 self.controls["forward"] = float(message.get("f", 0.0))
                 self.controls["strafe"] = float(message.get("s", 0.0))
                 self.turn_accumulated += float(message.get("t", 0.0))
@@ -156,13 +165,27 @@ class DoomGame:
             did = self.game.director(command)
             if did:
                 _log("DIRECTOR", did=did, via="http")
+        while True:
+            planned = ctx.inputs.read("controls_from_upstream")
+            if planned is None:
+                break
+            self.planner_controls, self.planner_ns = planned, now
         ticked = 0
         while now >= self.next_tick_ns and ticked < 4:
-            with self.lock:
-                controls = dict(self.controls)
-                controls["turn"] = self.turn_accumulated
-                self.turn_accumulated = 0.0
-                self.controls["weapon"] = 0
+            touching = now - self.last_touch_ns < 700_000_000
+            planning = self.planner_controls is not None and now - self.planner_ns < 500_000_000
+            if planning and not touching:
+                controls = {key: self.planner_controls.get(key, 0) for key in ("forward", "strafe", "turn", "fire", "use", "weapon")}
+                self.planner_controls["use"] = 0  # one plan, one press
+                self.planner_controls["weapon"] = 0
+                self.game.control_source = "autonomy"
+            else:
+                with self.lock:
+                    controls = dict(self.controls)
+                    controls["turn"] = self.turn_accumulated
+                    self.turn_accumulated = 0.0
+                    self.controls["weapon"] = 0
+                self.game.control_source = "teleop" if touching else ("autopilot" if self.game.autopilot else "idle")
             self.game.tick(controls)
             self.next_tick_ns += TIC_NS
             ticked += 1
@@ -172,6 +195,8 @@ class DoomGame:
             self.next_tick_ns = now
         world = self.game.snapshot()
         world["clients"] = self.clients
+        world["route"] = (self.planner_controls or {}).get("route") or []
+        world["stage_ns"] = {"game": clock.monotonic_now_ns()}
         ctx.outputs.write("world_to_downstream", world)
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
@@ -241,7 +266,8 @@ class E1M1GameRenderer(_GpuStage):
         f = (math.cos(view_angle), math.sin(view_angle))
         visible = []
         frames_by_prefix = self.shared.atlas.sprite_frames
-        for x, y, z, prefix, frame, thing_angle, fullbright, light in world["things"]:
+        for x, y, z, prefix, frame, thing_angle, fullbright, light, *tail in world["things"]:
+            kind = tail[0] if tail else THING_CLASS_DECORATION
             depth = (x - px) * f[0] + (y - py) * f[1]
             if depth < 4.0 or depth > 4000.0:
                 continue
@@ -251,11 +277,11 @@ class E1M1GameRenderer(_GpuStage):
             hit = frames.get((frame, rotation)) or frames.get((frame, 0))
             if hit is None:
                 continue
-            visible.append((depth, x, y, z, hit[0], hit[1], light, fullbright))
+            visible.append((depth, x, y, z, hit[0], hit[1], light, fullbright, kind))
         visible.sort(key=lambda v: -v[0])
-        for n, (depth, x, y, z, entry, mirrored, light, fullbright) in enumerate(visible[:256]):
+        for n, (depth, x, y, z, entry, mirrored, light, fullbright, kind) in enumerate(visible[:256]):
             rows[0, 2 * n] = (x, y, z, entry)
-            rows[0, 2 * n + 1] = (1.0 if mirrored else 0.0, light, float(fullbright), 0.0)
+            rows[0, 2 * n + 1] = (1.0 if mirrored else 0.0, light, float(fullbright), float(kind))
         tick, lights, floors, ceilings = world["tick"], world["lights"], world["floors"], world["ceilings"]
         for k, (floor, ceiling, floor_flat, ceiling_flat, light, special, tag) in enumerate(self.shared.level.sectors):
             rows[1, k] = (lights[k], self.shared.flat_entry(floor_flat, tick), self.shared.flat_entry(ceiling_flat, tick), 1.0 if ceiling_flat == "F_SKY1" else 0.0)
@@ -278,7 +304,8 @@ class E1M1GameRenderer(_GpuStage):
             group_count=(VIEW_W // 32, 1, 1), push_constants=push)
         ctx.outputs.write("view_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, hud=world["hud"], palette=world["palette"], state=world["state"],
                                                            event_log=world["event_log"], sector_light=world["lights"][world["sector"]],
-                                                           extralight=world["extralight"], tick=world["tick"]))
+                                                           extralight=world["extralight"], tick=world["tick"],
+                                                           stage_ns={**(world.get("stage_ns") or {}), "render": clock.monotonic_now_ns()}, pid=os.getpid()))
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
             _log("RENDERER_FRAME", frames=self.frames, things=thing_count)
@@ -410,6 +437,7 @@ class GameStatusBarCompositor(_GpuStage):
                 group_count=(VIEW_W // 8, VIEW_H // 8, 1),
                 push_constants=struct.pack("<4f", float(min(len(draws), 200)), float(weapon_map), effect_index, float(view.get("tick", 0))))
         ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], event_log=view["event_log"], tick=view["tick"],
+                                                            stage_ns={**(view.get("stage_ns") or {}), "hud": clock.monotonic_now_ns()}, pid=os.getpid(),
                                                             state=view["state"], hud={k: hud[k] for k in ("bullets", "shells", "health", "armor", "ready", "face", "message", "dead", "kills")}))
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
@@ -563,7 +591,17 @@ def _wav_bytes(samples: numpy.ndarray, rate: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-AUDIO_LEAD_NS = 120_000_000
+AUDIO_LEAD_NS = 30_000_000
+GRAPH_URL = os.environ.get("STREAMLIB_DOOM_CONTROL_URL", "http://127.0.0.1:9200") + "/api/graph"
+EFFECT_GAIN = {"DSSHOTGN": 0.55, "DSPISTOL": 0.5, "DSTELEPT": 0.7, "DSITEMUP": 0.6, "DSWPNUP": 0.6, "DSDOROPN": 0.5, "DSDORCLS": 0.5, "DSPLPAIN": 0.5}
+
+
+def _chime(frequencies: tuple, note_seconds: float) -> numpy.ndarray:
+    """Two FM-ish sine notes in a row with a quick decay: the sound of the graph changing."""
+    n = int(synth.SAMPLE_RATE * note_seconds)
+    t = numpy.arange(n) / synth.SAMPLE_RATE
+    notes = [numpy.sin(2 * math.pi * f * t) * numpy.exp(-t * 14.0) * 0.5 for f in frequencies]
+    return numpy.concatenate(notes).astype(numpy.float32)
 AUDIO_BLOCK_FRAMES = synth.SAMPLE_RATE // 100
 
 
@@ -591,22 +629,52 @@ class DoomAudioMixer:
         for lump_name, _o, _s in wad.lumps:
             if lump_name.startswith("DS"):
                 try:
-                    self.effects[lump_name] = synth.resample_effect(*wad.sound(lump_name))
+                    self.effects[lump_name] = synth.resample_effect(*wad.sound(lump_name)) * EFFECT_GAIN.get(lump_name, 0.6)
                 except (AssertionError, ValueError):
                     continue
+        self.effects["GRAPH_NODE_ADDED"] = _chime((880.0, 1318.5), 0.11)
+        self.effects["GRAPH_LINK_CUT"] = _chime((110.0, 82.4), 0.16) * 1.4
+        self.graph_events: "_queue.Queue[str]" = _queue.Queue()
+        threading.Thread(target=self._watch_graph, daemon=True).start()
         _log("MIXER_SETUP", effects=len(self.effects))
+
+    def _watch_graph(self) -> None:
+        """Polls the node's own graph off the audio thread and turns growth into a sound cue."""
+        import urllib.request
+        known_nodes, known_links = None, None
+        while True:
+            try:
+                with urllib.request.urlopen(GRAPH_URL, timeout=2) as reply:
+                    graph = json.load(reply)
+                nodes = {n["id"] for n in graph.get("nodes", [])}
+                links = {(l.get("from") or l.get("source") or str(l), l.get("to") or l.get("target") or "") for l in graph.get("links", graph.get("edges", []))}
+                if known_nodes is not None:
+                    for _ in nodes - known_nodes:
+                        self.graph_events.put("GRAPH_NODE_ADDED")
+                    if links - known_links == set() and known_links - links:
+                        self.graph_events.put("GRAPH_LINK_CUT")
+                known_nodes, known_links = nodes, links
+            except Exception:
+                pass
+            time.sleep(0.25)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now = clock.monotonic_now_ns()
         if self.anchor_ns == 0:
             self.anchor_ns = now
+        while not self.graph_events.empty():
+            self.pending.append((self.next_block, self.graph_events.get_nowait()))
         world = ctx.inputs.read("world_from_upstream")
         if world is not None:
             for tick, name in world.get("event_log") or []:
                 if tick > self.last_event_tick and name in self.effects:
                     self.pending.append((self.next_block, name))
+                    _log("MIXER_EFFECT", name=name, tick=tick, lag_ms=(self.anchor_ns + self.next_block * 10_000_000 - now) // 1_000_000)
             if world.get("event_log"):
                 self.last_event_tick = max(self.last_event_tick, max(tick for tick, _ in world["event_log"]))
+        self.calls = getattr(self, "calls", 0) + 1
+        if self.calls % 500 == 0:
+            _log("MIXER_CADENCE", calls=self.calls, elapsed_ms=(now - self.anchor_ns) // 1_000_000)
         while True:
             block_start_ns = self.anchor_ns + self.next_block * 10_000_000
             if block_start_ns - now > AUDIO_LEAD_NS:
@@ -615,18 +683,21 @@ class DoomAudioMixer:
             block = self.music[start : start + AUDIO_BLOCK_FRAMES].copy()
             if len(block) < AUDIO_BLOCK_FRAMES:
                 block = numpy.concatenate([block, self.music[: AUDIO_BLOCK_FRAMES - len(block)]])
+            if self.pending:
+                block *= 0.4
             still_pending = []
             for started_block, name in self.pending:
                 effect = self.effects[name]
                 offset = (self.next_block - started_block) * AUDIO_BLOCK_FRAMES
                 if offset < len(effect):
                     chunk = effect[offset : offset + AUDIO_BLOCK_FRAMES]
-                    block[: len(chunk), 0] += chunk * 0.8
-                    block[: len(chunk), 1] += chunk * 0.8
+                    block[: len(chunk), 0] += chunk
+                    block[: len(chunk), 1] += chunk
                     still_pending.append((started_block, name))
             self.pending = still_pending
+            block = numpy.tanh(block * 1.3) * 0.95  # a soft knee instead of a hard clip when shots overlap
             ctx.outputs.write("audio", {
-                "samples": numpy.clip(block, -1.0, 1.0).astype(numpy.float32).tobytes(), "sample_rate": synth.SAMPLE_RATE,
+                "samples": block.astype(numpy.float32).tobytes(), "sample_rate": synth.SAMPLE_RATE,
                 "channels": 2, "sample_count": AUDIO_BLOCK_FRAMES, "dtype": "f32", "first_sample_timestamp_ns": block_start_ns,
             })
             self.next_block += 1

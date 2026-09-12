@@ -8,7 +8,7 @@ Not a port of the Doom engine. The real E1M1 from the shareware WAD — its geom
 
 <img src="https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.gif" alt="E1M1 rendered by StreamLib" width="640">
 
-[Watch the recorded demo](https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.mp4) · [Play it](#play-it-on-your-phone) · [Claude directs it live](#claude-directs-it-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
+[Watch the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
 
 </div>
 
@@ -54,24 +54,30 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 ```
 
 
-## Claude directs it live
+## The robot console: sensors, autonomy, and Claude, all live
 
-The node serves an MCP endpoint. So while you play on your phone, Claude — running as `claude -p` on the desktop — can **see** the game through the `exchange` and `tap` tools, **read** the player's state, and **change the running graph** by adding processors. It is a StreamLib graph; every stage is inspectable and mutable at runtime.
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/console-thermal.png" alt="the robot console: live graph, operator view, depth, segmentation, lidar, map, telemetry, Claude directing" width="900"></a>
 
-<img src="https://gh-artifact.tatolab.com/streamlib-doom/doom-showcase.gif" alt="Claude directing DOOM live" width="900">
+**[Watch the 2‑minute reel with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4)** · [the uncut take](https://gh-artifact.tatolab.com/streamlib-doom/doom-console-full.mp4) · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.gif)
 
-The showcase node composites, at 1920×1080, the game the phone sees, the node's own live graph, and the transcript of what Claude is doing — and records the whole thing as an MP4 through StreamLib's own H.264 and Opus encoders:
+Treat the marine as a robot and the renderer as its camera, and the game becomes a robotics stack made of StreamLib processors — every one in its own process, fanned out from the same simulation and the same GPU frame with no copies:
+
+- **Perception** reads the rendered frame back and reports monsters by bearing and range from the segmentation and depth channels alone. It has no access to the simulation.
+- **The planner** builds a costmap of the level at 16‑unit cells, runs A* to the mission's goal, string‑pulls the route, faces and USEs doors, and turns to fight what perception reports. Its controls enter the game over a link — the same port a phone's controls arrive on. A hand on the phone overrides it for 700 ms after every touch; the badge under the operator view flips between AUTONOMY and TELEOP.
+- **The sensors** are added to the running graph over MCP, and their panes light up as the nodes appear: **depth** and **segmentation** are lookup‑table kernels over the renderer's own surface (the view is rgba8: palette index in red, log depth in green, surface class in blue); the **lidar** casts 360 rays a tic through the level's linedefs at eye height; the **occupancy map** folds the scans into free and occupied cells with the robot's trajectory and the planner's route — the level as the robot has discovered it, never the map file.
+- **Telemetry** shows the loop: sim tics a second, console frames a second, the render → HUD → console latency chain in milliseconds, and the frame witness — which surface id is in which process right now.
+- **The live graph** is the hero pane, drawn from the node's own `/api/graph`: every box a process, links pulsing with flow, a node added live scaling in gold with a chime from the mixer, a cut link flashing red.
 
 ```bash
-STREAMLIB_DOOM_RECORDING=showcase.mp4 STREAMLIB_DOOM_AUTOPILOT=1 uv run streamlib run -f showcase.py
-./director.sh "look at the game, then switch to night vision and teleport four imps in behind them"
+uv run streamlib run -f showcase.py                       # the console: phone-playable, nothing recorded
+STREAMLIB_DOOM_RECORDING=console.mp4 uv run streamlib run -f showcase.py
+scripts/demo-reel.py                                      # adds the sensors live, brings Claude in, runs the story
+./director.sh "send it to the courtyard and ambush it with four imps"
 ```
 
-`director.sh` runs `claude -p` with the node's MCP server. Claude reads `/snapshot.png` and `/state.json`, then adds a `DirectorCommand` processor to the live graph — which appears in the graph panel, glowing, labelled *added by Claude* — and it fires its instruction into the game. The verbs: spawn monsters, give weapons, dim the lights, splice a screen effect (night vision, thermal, CRT, invulnerable) that the compositor bakes into every frame the phone and the recording see, post a HUD message, god mode, heal, autopilot. Each is documented in the node's own catalog at `GET /api/registry`, so an agent learns them without reading this repo.
+The reel is driven over the same MCP tools an agent uses — `add_processor`, `connect`, `disconnect`, `remove_processor` on the live node — and the beat that says *Claude* runs `claude -p` for real: it reads the snapshot and the state, adds `DirectorCommand` nodes named `Claude: …` (they draw in gold), and its two‑sentence reply lands on the caption bar. Mid‑reel the HUD → console link is cut, a thermal effect node is spliced in and the picture turns thermal while the sensors stay untouched, then the node is removed and the link reconnected. Frames never stop; the recorder never notices.
 
-**[Watch the full 90-second showcase with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-showcase.mp4).** Every command in it is exactly what Claude issues; the recording is deterministic because the timeline is scripted, but the live `claude -p` path produces the same actions.
-
-Nothing about this is bolted on. The game is a processor, the renderer is a processor, Claude's commands are processors, and the panel showing all of them reads the node's real graph. Live graph mutation over a control plane is the thing StreamLib is for; DOOM is just a vivid way to see it.
+The 1920×1080 picture is composited by one kernel from textures the other processes published and recorded through the engine's own H.264 and Opus encoders into its MP4 writer — the runtime records this picture of itself.
 
 ## How it works
 
@@ -101,7 +107,9 @@ Each box is one `@processor` class in `streamlib_doom/`, running in its own chil
 | `game.py` (director) | the verbs Claude drives: spawn, give, lights, effect, message, god, heal, autopilot |
 | `director.py` | `DirectorCommand`, a processor that fires one instruction into the game when added |
 | `effects.py` | the screen filters, as index remaps built from PLAYPAL and COLORMAP |
-| `showcase.py` | the graph panel, the transcript panel, and the 1920x1080 recording compositor |
+| `sensors.py` | depth and segmentation kernels over the renderer's surface, perception from the frame, the lidar, the occupancy mapper |
+| `planner.py` | the costmap, A*, string pulling, door handling, and the mission planner processor whose controls enter the game over a link |
+| `showcase.py` | the live-graph panel, the caption bar, telemetry with the frame witness, and the 1920x1080 console kernel the engine records |
 
 ## Record the demo
 
@@ -131,7 +139,7 @@ uv sync --extra test
 uv run pytest
 ```
 
-The tests read the real WAD: the parser against id's byte layouts, the score's opening riff decoded to E2 E2 E3 E2 E2 D3, and the simulation tic by tic — walls that hold, a pistol that fires every fourteen tics, a door that opens and closes on its own.
+The tests read the real WAD: the parser against id's byte layouts, the score's opening riff decoded to E2 E2 E3 E2 E2 D3, the simulation tic by tic — walls that hold, a pistol that fires every fourteen tics, a door that opens and closes on its own — and the planner driving that simulation to the courtyard through a door and a firefight without an engine in the loop.
 
 ## Credits
 

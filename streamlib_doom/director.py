@@ -23,9 +23,10 @@ DIRECTOR_ENDPOINT = os.environ.get("STREAMLIB_DOOM_DIRECTOR_URL", "http://127.0.
 @dataclasses.dataclass
 class DirectorCommandConfig:
     command: Annotated[
-        Literal["spawn", "give", "lights", "effect", "message", "god", "heal", "autopilot"],
-        "What to do: spawn monsters, give the player things, set the lights, set a screen effect, post a message, god mode, heal, or hand the marine to the autopilot.",
+        Literal["spawn", "give", "lights", "effect", "message", "god", "heal", "autopilot", "mission"],
+        "What to do: spawn monsters, give the player things, set the lights, set a screen effect, post a message, god mode, heal, hand the marine to the autopilot, or give the planner a mission.",
     ]
+    goal: Annotated[Literal["patrol", "courtyard", "hangar", "hold"], "For mission: where the planner takes the robot. patrol loops the level; courtyard and hangar go there and hold; hold stops."] = "patrol"
     kind: Annotated[Literal["imp", "zombieman"], "For spawn: which monster."] = "imp"
     count: Annotated[int, "For spawn: how many, 1 to 8."] = 1
     where: Annotated[Literal["behind", "ahead", "left", "right"], "For spawn: where, relative to the way the player faces."] = "behind"

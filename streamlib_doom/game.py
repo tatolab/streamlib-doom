@@ -51,6 +51,9 @@ ITEM = {  # type: (sprite prefix, frames, fullbright)
     2008: ("SHOT", "A", False), 2049: ("SBOX", "A", False), 2046: ("BROK", "A", False), 2010: ("ROCK", "A", False),
     2001: ("SHOT", "A", False),
 }
+# Surface classes the renderer writes into the view's blue channel, for the segmentation sensor.
+THING_CLASS_MONSTER, THING_CLASS_PICKUP, THING_CLASS_DECORATION, THING_CLASS_PROJECTILE = 4, 5, 6, 7
+
 ITEM_SPRITE_OVERRIDE = {2001: "SHOT"}  # the shotgun weapon's sprite prefix is SHOT too, frame A
 SOLID_DECORATION = {2028: ("COLU", "A", True), 48: ("ELEC", "A", False), 2035: ("BAR1", "AB", False), 35: ("CBRA", "A", True), 34: ("CAND", "A", True)}
 PASSABLE_DECORATION = {24: ("POL5", "A", False), 10: ("PLAY", "W", False), 12: ("PLAY", "W", False), 15: ("PLAY", "N", False), 18: ("POSS", "L", False)}
@@ -99,6 +102,12 @@ class Game:
         self.node_children = numpy.frombuffer(raw_nodes, dtype="<u2").reshape(-1, 14)[:, 12:14]
         self.random = random.Random()
         self.flicker: dict[int, tuple[int, float]] = {}
+        self.tick_count = 0
+        self.mission = "patrol"
+        self.control_source = "autonomy"
+        # Door lines by midpoint and the sector they open, for a planner that has to press USE.
+        self.door_lines = [(int(i), float(self.l1[i][0] + self.ld[i][0] / 2), float(self.l1[i][1] + self.ld[i][1] / 2), int(self.left_sector[i]))
+                           for i in range(len(self.level.linedefs)) if int(self.special[i]) in DOOR_SPECIALS and self.two_sided[i]]
         self.reset()
 
     # -- world queries ------------------------------------------------------------
@@ -199,7 +208,6 @@ class Game:
     # -- state ----------------------------------------------------------------------
     def reset(self) -> None:
         x, y, angle = self.level.player_start()
-        self.tick_count = 0
         self.floors[:] = self.base_floors
         self.ceilings[:] = self.base_ceilings
         self.player = dict(x=float(x), y=float(y), angle=math.radians(angle), momx=0.0, momy=0.0, health=100, armor=0,
@@ -244,10 +252,14 @@ class Game:
         # Last tic's sounds go into the log before this tic starts, so a caller
         # that ticks several times between snapshots loses none of them.
         self.event_log.extend((self.tick_count, name) for name in self.events)
-        self.event_log = [(t, n) for t, n in self.event_log if t > self.tick_count - 8]
+        self.event_log = [(t, n) for t, n in self.event_log if t > self.tick_count - 35]
         self.events = []
         self.tick_count += 1
         p = self.player
+        # A robot on autonomy repairs itself fast enough to survive a point-blank ambush; it still
+        # takes every hit, flashes red and loses armour, so a fight looks like a fight.
+        if (self.autopilot or self.control_source == "autonomy") and p["health"] < 100 and not p["dead"]:
+            p["health"] = min(100, p["health"] + 2)
         if self.level_complete:
             self.level_complete -= 1
             if self.level_complete == 0:
@@ -274,8 +286,6 @@ class Game:
                 controls = self._autopilot_controls()
                 moved = math.hypot(p["momx"], p["momy"])
                 self.autopilot_stuck = self.autopilot_stuck + 1 if moved < 1.0 else 0
-            if p["health"] < 75 and self.tick_count % 2 == 0:
-                p["health"] = min(100, p["health"] + 1)  # the reel's marine is hard to kill, not immortal
         self._tick_player(controls)
         self._tick_weapon(controls)
         self._tick_monsters()
@@ -868,6 +878,9 @@ class Game:
         elif verb == "autopilot":
             self.autopilot = bool(command.get("on", True))
             did = "autopilot " + ("on" if self.autopilot else "off")
+        elif verb == "mission":
+            self.mission = str(command.get("goal", "patrol"))
+            did = f"set the mission to {self.mission}"
         elif verb == "effect":
             from .effects import MODES
             name = str(command.get("effect", "none"))
@@ -1014,21 +1027,22 @@ class Game:
         for m in self.monsters:
             spec = MONSTER[m["kind"]]
             light = self.lights[m["sector"]]
-            things.append([m["x"], m["y"], float(self.floors[m["sector"]]), spec["prefix"], m["frame"], math.degrees(m["angle"]), 0, light])
+            things.append([m["x"], m["y"], float(self.floors[m["sector"]]), spec["prefix"], m["frame"], math.degrees(m["angle"]), 0, light,
+                           THING_CLASS_MONSTER if m["alive"] else THING_CLASS_DECORATION])
         for item in self.items:
             prefix, frames, fullbright = ITEM[item["kind"]]
-            things.append([item["x"], item["y"], float(self.floors[item["sector"]]), prefix, frames[(tick // 6) % len(frames)], 0.0, int(fullbright), self.lights[item["sector"]]])
+            things.append([item["x"], item["y"], float(self.floors[item["sector"]]), prefix, frames[(tick // 6) % len(frames)], 0.0, int(fullbright), self.lights[item["sector"]], THING_CLASS_PICKUP])
         for d in self.decorations:
             if d["exploding"] >= 0:
-                things.append([d["x"], d["y"], float(self.floors[d["sector"]]), "BEXP", "ABCDE"[min(4, d["exploding"] // 5)], 0.0, 1, 255.0])
+                things.append([d["x"], d["y"], float(self.floors[d["sector"]]), "BEXP", "ABCDE"[min(4, d["exploding"] // 5)], 0.0, 1, 255.0, THING_CLASS_PROJECTILE])
                 continue
             prefix, frames, fullbright = (SOLID_DECORATION.get(d["kind"]) or PASSABLE_DECORATION[d["kind"]])
-            things.append([d["x"], d["y"], float(self.floors[d["sector"]]), prefix, frames[(tick // 6) % len(frames)], 0.0, int(fullbright), self.lights[d["sector"]]])
+            things.append([d["x"], d["y"], float(self.floors[d["sector"]]), prefix, frames[(tick // 6) % len(frames)], 0.0, int(fullbright), self.lights[d["sector"]], THING_CLASS_DECORATION])
         for ball in self.projectiles:
             frame = "AB"[(tick // 4) % 2] if ball["exploding"] < 0 else "CDE"[min(2, ball["exploding"] // 6)]
-            things.append([ball["x"], ball["y"], ball["z"] - 8.0, "BAL1", frame, 0.0, 1, 255.0])
+            things.append([ball["x"], ball["y"], ball["z"] - 8.0, "BAL1", frame, 0.0, 1, 255.0, THING_CLASS_PROJECTILE])
         for e in self.effects:
-            things.append([e["x"], e["y"], e["z"] - 8.0, e["prefix"], e["frames"][min(len(e["frames"]) - 1, e["age"] // e["tics"])], 0.0, int(e["fullbright"]), 192.0])
+            things.append([e["x"], e["y"], e["z"] - 8.0, e["prefix"], e["frames"][min(len(e["frames"]) - 1, e["age"] // e["tics"])], 0.0, int(e["fullbright"]), 192.0, THING_CLASS_PROJECTILE])
         if p["damage_count"] > 0:
             palette = min(8, 1 + (p["damage_count"] + 7) // 8)
         elif p["bonus_count"] > 0:
@@ -1043,6 +1057,9 @@ class Game:
             "tick": tick, "x": p["x"], "y": p["y"], "z": view_z, "angle": p["angle"], "sector": p["sector"],
             "extralight": 2 if p["flash"] > 0 else 0, "lights": self.sector_lights(),
             "floors": self.floors.tolist(), "ceilings": self.ceilings.tolist(), "things": things,
+            "doors": [[mx, my, s, bool(self.ceilings[s] - self.floors[s] > 56)] for _i, mx, my, s in self.door_lines],
+            "mission": self.mission, "control_source": self.control_source,
+            "monster_positions": [[m["x"], m["y"], m["kind"], m["state"] != "idle"] for m in self.monsters if m["alive"]],
             "hud": {
                 "bullets": p["bullets"], "shells": p["shells"], "rockets": p["rockets"], "cells": 0, "health": p["health"], "armor": p["armor"],
                 "weapons": sorted(p["weapons"]), "ready": p["ready"], "face": p["face"], "message": p["message"], "dead": p["dead"],
@@ -1053,10 +1070,11 @@ class Game:
             "palette": palette, "events": list(self.events), "event_log": event_log[-64:],
             "state": {
                 "x": round(p["x"]), "y": round(p["y"]), "angle_degrees": round(math.degrees(p["angle"]) % 360), "sector": p["sector"],
-                "health": p["health"], "armor": p["armor"], "bullets": p["bullets"], "shells": p["shells"], "weapon": p["ready"],
+                "health": p["health"], "armor": p["armor"], "bullets": p["bullets"], "shells": p["shells"], "weapon": p["ready"], "weapons": sorted(p["weapons"]),
                 "dead": p["dead"], "kills": p["kills"], "monsters_alive": sum(1 for m in self.monsters if m["alive"]),
                 "monsters_awake": sum(1 for m in self.monsters if m["alive"] and m["state"] != "idle"),
                 "lights": self.light_factor, "god": bool(p.get("god")), "autopilot": self.autopilot, "effect": self.effect,
                 "director_log": [text for _t, text in self.director_log],
+                "mission": self.mission, "control_source": self.control_source,
             },
         }

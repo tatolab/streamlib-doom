@@ -79,7 +79,9 @@ def build_remap(wad: Wad, effect: str) -> numpy.ndarray:
     palette = wad.palettes()[0]
     luminance = (0.299 * palette[:, 0] + 0.587 * palette[:, 1] + 0.114 * palette[:, 2])
     if effect == "night_vision":
-        target = numpy.stack([luminance * 0.15, numpy.clip(luminance * 1.2 + 16, 0, 255), luminance * 0.15], axis=1)
+        # Image intensifiers amplify: dark corridors come up bright green rather than staying black.
+        lifted = numpy.clip(luminance * 1.9 + 48, 0, 255)
+        target = numpy.stack([lifted * 0.18, lifted, lifted * 0.2], axis=1)
         return _nearest_palette_index(palette, target)
     if effect == "thermal":
         t = luminance / 255.0

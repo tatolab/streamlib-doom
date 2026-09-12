@@ -29,7 +29,7 @@ def _bearing_words(degrees: float) -> str:
     if abs(degrees) < 8:
         return "dead ahead"
     side = "left" if degrees > 0 else "right"
-    return f"{abs(degrees):.0f}° to the {side}"
+    return f"{abs(degrees):.0f} degrees to the {side}"  # the console's bitmap font has no degree sign
 
 
 class LiveEventTranscriptHandler(BaseHTTPRequestHandler):

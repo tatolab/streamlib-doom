@@ -14,6 +14,7 @@ import math
 import os
 import struct
 import subprocess
+import threading
 import time
 import urllib.request
 
@@ -27,6 +28,13 @@ OUT_W, OUT_H = 1920, 1080
 VIEW_W, VIEW_H = 320, 200
 PANE_W, PANE_H = 360, 225
 GRAPH_W, GRAPH_H = 576, 480
+# The event feed sits under the graph, so the boxes and what they noticed read as one column.
+EVENT_FEED_H = 150
+EVENT_FEED_URL = os.environ.get("STREAMLIB_DOOM_TRANSCRIPT_URL", "http://127.0.0.1:8670/transcript?tail=6")
+EVENT_KIND_COLORS = {"contact": (120, 200, 255), "damage": (255, 120, 110), "kill": (255, 200, 90),
+                     "pickup": (150, 230, 150), "director": (255, 200, 80), "control": (200, 170, 255),
+                     "mission": (200, 170, 255), "death": (255, 90, 90), "move": (150, 160, 180),
+                     "style": (255, 200, 80), "start": (150, 160, 180)}
 CAPTION_W, CAPTION_H = 1888, 252
 TELEMETRY_W, TELEMETRY_H = 300, 188
 NEURAL_W, NEURAL_H = 512, 320
@@ -262,6 +270,8 @@ class GraphPanel(_PanelPublisher):
         self.last_poll = 0.0
         self.frames = 0
         self.positions: dict = {}
+        self.events: list = []
+        self.events_at = 0.0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info(f"MARKER:GRAPH_PANEL_SETUP pid={os.getpid()}")
@@ -303,6 +313,7 @@ class GraphPanel(_PanelPublisher):
             if a and b:
                 links.append((a, b))
         depth = _layer(nodes, links)
+        usable_h = GRAPH_H - EVENT_FEED_H - 34
         max_columns = max(1, min(5, (GRAPH_W - 24) // 108))
         deepest = max(depth.values(), default=0)
         if deepest >= max_columns:
@@ -318,11 +329,11 @@ class GraphPanel(_PanelPublisher):
         positions = {}
         node_h = NODE_H
         for col, col_nodes in by_col.items():
-            pitch_y = min(92, (GRAPH_H - 36) // max(len(col_nodes), 1))
-            node_h = min(node_h, max(30, pitch_y - 6))
+            pitch_y = min(92, usable_h // max(len(col_nodes), 1))
+            node_h = min(node_h, max(26, pitch_y - 6))
         for col, col_nodes in by_col.items():
-            pitch_y = min(92, (GRAPH_H - 36) // max(len(col_nodes), 1))
-            top = (GRAPH_H - 24 - pitch_y * len(col_nodes)) // 2 + 6
+            pitch_y = min(92, usable_h // max(len(col_nodes), 1))
+            top = (usable_h - pitch_y * len(col_nodes)) // 2 + 6
             for row, n in enumerate(col_nodes):
                 positions[n["id"]] = (12 + col * pitch_x, top + row * pitch_y)
         self.positions = positions
@@ -396,11 +407,32 @@ class GraphPanel(_PanelPublisher):
             opacity = 1.0 - (now - gone_at) / 0.6
             rect(canvas, x, y, NODE_W - 40, NODE_H - 12, (int(90 * opacity), int(40 * opacity), int(40 * opacity)), (int(220 * opacity), 60, 60), 2)
         footer = f"{len(nodes)} processors · {len(links)} links · every box its own process"
-        font(13).draw(canvas, footer, 12, GRAPH_H - 20, (150, 160, 180), GRAPH_W - 24)
+        font(13).draw(canvas, footer, 12, GRAPH_H - EVENT_FEED_H - 18, (150, 160, 180), GRAPH_W - 24)
+
+        top = GRAPH_H - EVENT_FEED_H
+        line(canvas, 12, top, GRAPH_W - 12, top, (40, 44, 58), 2)
+        font(13).draw(canvas, "EVENTS  ·  written by the graph, read by the agent", 12, top + 8, (150, 160, 180), GRAPH_W - 24)
+        y = top + 30
+        for entry in self.events[-6:]:
+            colour = EVENT_KIND_COLORS.get(str(entry.get("kind", "")), (200, 210, 225))
+            font(13).draw(canvas, f"{float(entry.get('t', 0)):6.1f}s", 12, y, (110, 120, 140), 60)
+            font(14).draw(canvas, str(entry.get("text", ""))[:56], 76, y, colour, GRAPH_W - 90)
+            y += 19
         return canvas
+
+    def _poll_events(self) -> None:
+        """The transcript node serves its own lines; polling beats a ninth link into the console."""
+        try:
+            with urllib.request.urlopen(EVENT_FEED_URL, timeout=0.4) as answer:
+                self.events = json.loads(answer.read()).get("lines", [])
+        except Exception:
+            pass  # the transcript node may not be in the graph yet
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now = time.monotonic()
+        if now - self.events_at > 0.5:
+            self.events_at = now
+            threading.Thread(target=self._poll_events, name="event-feed", daemon=True).start()
         if now - self.last_poll > 0.25:
             graph = self._poll()
             self.last_poll = now

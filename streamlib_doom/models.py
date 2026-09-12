@@ -22,7 +22,8 @@ from streamlib import ProcessorOutputTextureRing, RuntimeContextFullAccess, Runt
 from .wad import Wad
 
 VIEW_W, VIEW_H = 320, 200
-OUT_W, OUT_H = 640, 400
+# The console samples this pane as 512x320; publishing anything else shears it.
+OUT_W, OUT_H = 512, 320
 MAX_TRACKED = 16
 RING_USAGE = ["texture_binding", "storage_binding"]
 SUBSTITUTE_FPS = float(os.environ.get("STREAMLIB_DOOM_SUBSTITUTE_FPS", "30"))
@@ -43,6 +44,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 const int MONSTER_CLASS = 4;
+const int HUD_CLASS = 8;
 const float MODEL_HEIGHT = 56.0;
 
 float sd_box(vec3 p, vec3 b) { vec3 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }
@@ -148,7 +150,8 @@ void main() {
         }
     }
 
-    if (best_t < 1.0e9 && best_t < game_range) {
+    // The status bar and the weapon are drawn over the world, not in it; nothing marched belongs there.
+    if (surface != HUD_CLASS && best_t < 1.0e9 && best_t < game_range) {
         vec3 n = scene_normal(best_p, best_phase);
         vec3 light = normalize(vec3(0.4, 0.9, -0.5));
         float diffuse = max(dot(n, light), 0.0);

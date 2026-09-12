@@ -849,7 +849,7 @@ class ConsoleCompositor:
 
     def _draw_neural_banner(self, chrome, model: str) -> None:
         chrome[46:68, 1264:1904, :] = 0
-        blit(chrome, render_text(f"NEURAL RE-RENDER  ·  {model}  ·  its own process", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 1264, 46)
+        blit(chrome, render_text(f"RENDERED OUTPUT  ·  {model}", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 1264, 46)
 
     def _follow_neural_model(self, model: str) -> None:
         """The banner names whichever model is publishing, so swapping one cannot leave it lying."""
@@ -909,7 +909,7 @@ class ConsoleCompositor:
         blit(chrome, render_text("THE GAME  ·  1993, what the phone sees", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 608, 46)
         self._chrome_canvas = chrome
         self._banner_model = ""
-        self._draw_neural_banner(chrome, "starting…")
+        self._draw_neural_banner(chrome, "the graph's own picture, one processor at a time")
         for i, name in enumerate(SENSOR_PANES):
             blit(chrome, render_text(SENSOR_TITLES[name], STRIP_W, 22, 13, "rgb(150,160,180)", FONT_BOLD), SENSOR_X[i], SENSOR_Y + 5)
             rect_border = numpy.zeros((STRIP_H + 2, STRIP_W + 2, 4), dtype=numpy.uint8)

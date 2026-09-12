@@ -11,10 +11,18 @@ import importlib.util, json, os, sys, time, urllib.request
 spec = importlib.util.spec_from_file_location("reel", os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo-reel.py"))
 reel = importlib.util.module_from_spec(spec); spec.loader.exec_module(reel)
 
+# Which re-render fills the neural pane. `video` is the causal video model (StreamDiffusionV2);
+# `sdturbo` is the per-frame image model with the reprojected feedback loop.
+RERENDER = os.environ.get("STREAMLIB_DOOM_RERENDER", "sdturbo")
+RERENDER_TYPES = {"sdturbo": "streamlib_doom.neural:DiffusionRerender",
+                  "video": "streamlib_doom.streamdiffusion:VideoDiffusionRerender"}
+if RERENDER not in RERENDER_TYPES:
+    raise SystemExit(f"STREAMLIB_DOOM_RERENDER must be one of {sorted(RERENDER_TYPES)}, not {RERENDER!r}")
+
 NODES = [  # name, type, (from, from_port) input, (to, to_port) output
     ("Lidar", "streamlib_doom.sensors:LidarScanner", ("Game", "world_to_downstream", "world_from_upstream"), ("scan_to_downstream", None, None)),
     ("Map", "streamlib_doom.sensors:OccupancyMapper", ("Lidar", "scan_to_downstream", "scan_from_upstream"), ("map_to_downstream", "Console", "map_from_upstream")),
-    ("Diffusion", "streamlib_doom.neural:DiffusionRerender", ("Render", "view_to_downstream", "view_from_upstream"), ("neural_to_downstream", "Console", "neural_from_upstream")),
+    ("Diffusion", RERENDER_TYPES[RERENDER], ("Render", "view_to_downstream", "view_from_upstream"), ("neural_to_downstream", "Console", "neural_from_upstream")),
     ("DepthNet", "streamlib_doom.neural:NeuralDepth", ("Render", "view_to_downstream", "view_from_upstream"), ("depth_trio_to_downstream", "Console", "depth_trio_from_upstream")),
     ("Detector", "streamlib_doom.neural:MonsterDetector", ("Render", "view_to_downstream", "view_from_upstream"), ("detector_pane_to_downstream", "Console", "detector_from_upstream")),
     ("Repainter", "streamlib_doom.neural:Repainter", ("Game", "world_to_downstream", "world_from_upstream"), ("patches_to_downstream", "Render", "atlas_patch_from_upstream")),

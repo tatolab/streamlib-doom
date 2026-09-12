@@ -35,6 +35,8 @@ The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Giv
 
 `streamlib_doom.neural:DiffusionRerender` (connect `Render.view_to_downstream` → its `view_from_upstream`, its `neural_to_downstream` → `Console.neural_from_upstream`), `NeuralDepth` (same input; `depth_trio_to_downstream` → `Console.depth_trio_from_upstream`), `MonsterDetector` (same input; `detector_pane_to_downstream` → `Console.detector_from_upstream`; its `detections_to_downstream` can replace the oracle perception on `Planner.detections_from_upstream` and `Telemetry.detections_from_upstream`), and `Repainter` (`Game.world_to_downstream` → its `world_from_upstream`; `patches_to_downstream` → `Render.atlas_patch_from_upstream`). Each loads a model on the GPU at setup, so its pane appears a few seconds after it is wired.
 
+`streamlib_doom.streamdiffusion:VideoDiffusionRerender` is a causal video re-render that drops into the same two ports; it is steadier but blurrier and costs the console 6 fps, so `sdturbo` stays the default and `STREAMLIB_DOOM_RERENDER=video scripts/neural-setup.py` opts in. Measurements are in the README.
+
 ## The robot's sensors are processors too
 
 The game is a robot: the renderer is its camera. These sensors can be added to the running graph with `add_processor` and `connect` (types in the catalog): `streamlib_doom.sensors:DepthSensor` and `SegmentationSensor` (connect `Render.view_to_downstream` → their `view_from_upstream`, their output → `Console.depth_from_upstream` / `segmentation_from_upstream`), `LidarScanner` (from `Game.world_to_downstream`, to `Console.lidar_from_upstream`), `OccupancyMapper` (from `Lidar.scan_to_downstream`, to `Console.map_from_upstream`). Their panes appear on the console the moment they are wired.

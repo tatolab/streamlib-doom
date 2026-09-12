@@ -145,6 +145,82 @@ sd-turbo's SD 2.1 is not one.
 
 What made it fast was not resolution: at this size the models are launch-bound, so the UNet costs the same on 64×40 latents as on 44×28. Encoding each prompt once and letting inductor replay the denoising step as a CUDA graph took a frame from 98 ms to 52 ms under full load. The models pace themselves — diffusion 12 Hz, depth 4 Hz, detector 1.5 Hz — so the renderer keeps 60 fps and the console around 50 with the GPU at 50 to 80 percent. Telemetry shows the GPU load, each model's frame time and score, and the console's own rate, so the picture never claims more than it measures.
 
+### A causal video model, measured against the image model — and not shipped as the default
+
+The obvious objection to a per-frame image model is that temporal consistency is bolted on. So
+[StreamDiffusionV2](https://github.com/chenfengxu714/StreamDiffusionV2) (Wan 2.1 1.3B, DMD-distilled,
+rolling KV cache over four-frame chunks) was benchmarked as a replacement. It runs, it is genuinely
+steadier frame to frame, and it is **not** the default, because it is much blurrier and it costs the
+rest of the graph too much.
+
+Every number below is on one RTX 3090. Quality is the same 48-frame capture and the same two metrics
+`streamlib_doom/capture.py` exists for, scored at the 512×320 the console samples, with the shipping
+sd-turbo settings as the control. `noise_scale` 0.75 except the last row.
+
+| size | step | TAEHV | out fps | ms/chunk | VRAM peak | first frame | change, reprojected | change, plain | detail |
+|---|---|---|---|---|---|---|---|---|---|
+| 480×832 | 1 | no | 5.4 | 746 | 13.3 GB | 1.35 s | 16.02 | 17.78 | 1.63 |
+| 480×832 | 1 | yes | 9.0 | 446 | 11.1 GB | 0.91 s | 19.51 | 17.29 | 1.74 |
+| 480×832 | 2 | no | 4.5 | 885 | 15.1 GB | 1.55 s | 18.38 | 18.48 | 1.47 |
+| 480×832 | 2 | yes | 6.7 | 585 | 12.7 GB | 1.10 s | 21.81 | 18.36 | 1.59 |
+| 320×544 | 1 | no | 11.8 | 340 | 8.1 GB | 0.82 s | 16.41 | 15.44 | 2.06 |
+| 320×544 | 1 | yes | 19.3 | 207 | 7.1 GB | 0.62 s | 18.59 | 14.79 | 1.91 |
+| 320×544 | 2 | no | 9.9 | 397 | 8.8 GB | 0.92 s | 19.03 | 15.69 | 1.80 |
+| 320×544 | 2 | yes | 14.8 | 264 | 7.8 GB | 0.71 s | 20.34 | 15.86 | 1.61 |
+| 256×448 | 1 | no | 17.4 | 230 | 6.7 GB | 0.66 s | 16.02 | 14.28 | 1.67 |
+| 256×448 | 1 | yes | 27.9 | 144 | 6.1 GB | 0.55 s | 17.10 | 13.45 | 1.63 |
+| 256×448 | 2 | no | 14.2 | 277 | 7.2 GB | 0.74 s | 18.51 | 13.87 | 1.69 |
+| 256×448 | 2 | yes | 20.4 | 191 | 6.7 GB | 0.67 s | 19.91 | 13.87 | 1.60 |
+| 320×544, noise 0.85 | 1 | yes | 19.4 | 206 | 7.1 GB | 0.61 s | 19.66 | 13.45 | **2.33** |
+| **sd-turbo, what ships** | — | — | 19.0 | 53 per frame | 3.6 GB | — | **10.28** | 19.30 | **6.36** |
+
+Throughput is no obstacle: TAEHV is worth 1.6–1.7× everywhere, and 256×448 at one step sustains 27.9
+fps. Quality is. On plain consecutive-frame change the video model wins clearly — 13.5 against 19.3,
+30% less raw flicker, which is exactly what a causal model with a KV cache should buy. But once the
+camera motion is compensated for, the image model's reprojected feedback loop is steadier still
+(10.28 against 16–22), and the video model carries a third of the detail at best. That is not an
+artefact of scoring at 512×320: at its own 256×448 the best configuration measures 2.98 against
+sd-turbo's 6.36. Raising `noise_scale` from 0.75 to 0.85 buys 45% more detail for no extra time and
+is the default here, and it still is not close.
+
+On the full graph — renderer at 60, depth, detector, lidar, map and the console, mission `patrol`,
+60 s each, measured from the bags' own publish stamps and the console's `MARKER:CONSOLE_TIMING`:
+
+| | sd-turbo | video, 320×544 step 1 TAEHV, paced 16 |
+|---|---|---|
+| re-render output | 11.9 fps | 17.4 fps |
+| render → re-render lag, median / p90 | 486 / 514 ms | 1286 / 1400 ms |
+| GPU | 63% | 97% |
+| GPU memory peak | 9.9 GB | 12.4 GB |
+| console compositor | 21.4 fps | 14.9 fps |
+| neural pane, frame-to-frame change | 5.75 | **3.48** |
+| neural pane, detail | **9.03** | 3.06 |
+
+The bar set before any of this was measured: switch only if the video model holds ≥ 8 output fps,
+≤ 1.2 s glass to glass, less frame-to-frame change at ≥ 80% of sd-turbo's detail, and the console
+keeps ≥ 45 fps. It meets two of five. It is steadier and it is fast enough; it is 1.29 s behind the
+game, it carries 34% of the detail, and at 97% GPU it drags the console from 21 fps to 15. So
+sd-turbo stays the default and the video model is opt-in:
+
+```bash
+STREAMLIB_DOOM_RERENDER=video scripts/neural-setup.py     # sdturbo is the default
+```
+
+`STREAMLIB_DOOM_VIDEO_DIFFUSION_HEIGHT` / `_WIDTH` / `_STEP` / `_NOISE` / `_TAEHV` / `_FPS` tune it;
+`STREAMLIB_DOOM_VIDEO_DIFFUSION_CKPT` and `STREAMDIFFUSIONV2_ROOT` say where the 23 GB of weights
+live. Install it with `--no-deps` — the published package pins torch 2.6 and numpy 1.24, and the
+engine's DLPack door needs a cu126 torch — plus `av einops ftfy imageio imageio-ffmpeg omegaconf
+sentencepiece scikit-image`. It ran unmodified against torch 2.14, numpy 2.5, transformers 5.17 and
+diffusers 0.40; the only thing it takes from transformers is `AutoTokenizer`.
+
+Two things are worth knowing if you try it. The pipeline's `to(device)` moves the 11 GB umt5-xxl text
+encoder onto the GPU with everything else, which on a 24 GB card is most of the budget for a prompt
+that changes only when someone asks for a new style; keeping it on the CPU drops resident VRAM from
+13.8 GB to 3.0 GB and costs 10 s per new style, off the frame thread and cached. And the engine gives
+`setup()` 60 s while this checkpoint needs 87 s, so the load runs on the processor's worker thread and
+the node simply publishes nothing until it is ready — which is exactly the case `scripts/neural-setup.py`
+already proves with `tap` and re-wires.
+
 One engine finding worth knowing if you build on this: a link wired over MCP into a helper that is still loading its model can fail to open its port on either end, and the runtime reports the helper as running before its setup has finished. `scripts/neural-setup.py` therefore proves each node with `tap` on its output and the console's own `/panes` status before it returns, and re-wires whichever link stays silent.
 
 ## The robot console: sensors, autonomy, and Claude, all live

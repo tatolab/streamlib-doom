@@ -114,6 +114,15 @@ curl "http://127.0.0.1:8670/transcript?since=40"   # the lines after 40
 curl "http://127.0.0.1:8670/transcript?tail=10"    # the last ten
 ```
 
+It reads the game's own state — health, kills, position — not the picture, so it is a transcript of
+a simulation the graph is inside of, not video analysis. That is the right call for a game, where
+the state is simply available and far more accurate than perception on a 22-pixel sprite. It is not
+the right call as a claim about watching video. The honest version of this takes its detections from
+the Grounding DINO node and its ranges from the depth network, which read only pixels and would work
+the same on a real camera, and uses the game's state to score them rather than to write the lines.
+Both nodes are already in the graph doing exactly that grading; the transcript just does not use
+them yet.
+
 Getting the noise out was most of the work. Sector changes fire every few steps in a corridor, so
 movement is reported by distance travelled instead; the autonomy regenerates two health a tic, so
 only a gain of ten or more counts as a pickup; a target stepping behind a pillar changes the

@@ -91,6 +91,21 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 ```
 
 
+## One graph, three worlds — LEGO, neon, and whatever Claude picks
+
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/styles-cyberpunk.png" alt="the same corridor as LEGO, as blade runner neon, and as stained glass" width="900"></a>
+
+**[Watch it](https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.mp4)** · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.gif) · stills: [LEGO](https://gh-artifact.tatolab.com/streamlib-doom/styles-lego.png) · [neon](https://gh-artifact.tatolab.com/streamlib-doom/styles-cyberpunk.png) · [Claude's pick](https://gh-artifact.tatolab.com/streamlib-doom/styles-claude.png)
+
+The level in bricks, then one `style` command turns it into Blade Runner without restarting or
+re-wiring anything, then `claude -p` picks a look of its own, adds the processor that applies it and
+sends monsters to meet the robot in it. The sensors never notice: depth, detection and the map read
+the game's frame, not the dream.
+
+Every pane carries a rim that lights when a frame lands in it. The game's holds steady at 60 fps, the
+re-render's shimmers at 12 Hz, the detector's blinks once or twice a second, and a pane nothing feeds
+stays dark — the graph's liveness drawn on the picture itself, straight from when each bag arrived.
+
 ## DOOM, rebuilt in LEGO while you play — a diffusion model, graded by its own renderer
 
 <a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/lego-minifig.png" alt="the game beside its LEGO re-render, with neural depth, a detector and the level repainted" width="900"></a>

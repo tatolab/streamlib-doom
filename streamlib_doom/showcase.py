@@ -432,7 +432,8 @@ class GraphPanel(_PanelPublisher):
         if self.last_graph is None:
             return
         canvas = self._draw(self.last_graph, now)
-        self._publish(ctx, canvas, "panel_to_downstream", {"nodes": len(self.last_graph.get("nodes", []))})
+        changed = (now - max(self.first_seen.values(), default=-1e9) < 2.0) or bool(self.cut_links) or bool(self.ghosts)
+        self._publish(ctx, canvas, "panel_to_downstream", {"nodes": len(self.last_graph.get("nodes", [])), "event": changed})
         self.frames += 1
         if self.frames in (1, 50):
             log.info(f"MARKER:GRAPH_PANEL frames={self.frames}")
@@ -670,7 +671,18 @@ layout(set = 0, binding = 10) uniform sampler2D badges;        // 640x84: three 
 layout(set = 0, binding = 11, rgba8) uniform writeonly image2D output_image;
 layout(push_constant) uniform PC { float palette; float badge; float reproject; float unused1;
                                    float cur_x; float cur_y; float cur_z; float cur_angle;
-                                   float neu_x; float neu_y; float neu_z; float neu_angle; } pc;
+                                   float neu_x; float neu_y; float neu_z; float neu_angle;
+                                   float f_graph; float f_game; float f_neural; float f_depth;
+                                   float f_detector; float f_map; float f_telemetry; float f_caption; } pc;
+
+// A ring just outside a pane, lit by how recently that pane took a new frame: the fast ones hold
+// a steady glow, the slow ones pulse, and a pane nothing feeds stays dark. It is the graph's
+// liveness drawn on the picture itself.
+bool on_ring(ivec2 at, int x0, int y0, int w, int h, int t) {
+    bool outside = at.x < x0 - t || at.x >= x0 + w + t || at.y < y0 - t || at.y >= y0 + h + t;
+    bool inside = at.x >= x0 && at.x < x0 + w && at.y >= y0 && at.y < y0 + h;
+    return !outside && !inside;
+}
 
 const int SENSOR_Y = 584; const int LABEL_H = 26; const int STRIP_H = 188; const int STRIP_W = 300;
 const float FOCAL = 160.0; const float CENTER_Y = 100.0;
@@ -735,6 +747,16 @@ void main() {
     } else if (at.x >= 16 && at.x < 16 + 1888 && at.y >= 812 && at.y < 812 + 252) {
         color = vec4(texelFetch(caption, ivec2(at.x - 16, at.y - 812), 0).rgb, 1.0);
     }
+    float fresh = 0.0;
+    if (on_ring(at, 16, 64, 576, 480, 3))    fresh = max(fresh, pc.f_graph);
+    if (on_ring(at, 608, 64, 640, 480, 3))   fresh = max(fresh, pc.f_game);
+    if (on_ring(at, 1264, 64, 640, 480, 3))  fresh = max(fresh, pc.f_neural);
+    for (int i = 0; i < 3; i++) if (on_ring(at, 16 + i * 316, SENSOR_Y + LABEL_H, STRIP_W, STRIP_H, 3)) fresh = max(fresh, pc.f_depth);
+    if (on_ring(at, 16 + 3 * 316, SENSOR_Y + LABEL_H, STRIP_W, STRIP_H, 3)) fresh = max(fresh, pc.f_detector);
+    if (on_ring(at, 16 + 4 * 316, SENSOR_Y + LABEL_H, STRIP_W, STRIP_H, 3)) fresh = max(fresh, pc.f_map);
+    if (on_ring(at, 16 + 5 * 316, SENSOR_Y + LABEL_H, STRIP_W, STRIP_H, 3)) fresh = max(fresh, pc.f_telemetry);
+    if (on_ring(at, 16, 812, 1888, 252, 3))  fresh = max(fresh, pc.f_caption);
+    if (fresh > 0.01) color = vec4(mix(color.rgb, vec3(0.42, 0.95, 1.0), clamp(fresh, 0.0, 1.0)), 1.0);
     vec4 over = texelFetch(chrome, at, 0);
     color = vec4(mix(color.rgb, over.rgb, over.a), 1.0);
     imageStore(output_image, at, color);
@@ -749,6 +771,7 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 """
 
 REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
+GLOW_SECONDS = float(os.environ.get("STREAMLIB_DOOM_GLOW_SECONDS", "0.20"))
 DIRECTOR_ACTIONS = (
     "spawn monsters  ·  give weapons  ·  set the lights",
     "screen effect  ·  HUD message  ·  god  ·  heal",
@@ -807,6 +830,7 @@ class ConsoleCompositor:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=4)
         self.latest: dict = {}
         self.arrived: dict = {}  # pane -> monotonic time its newest bag arrived
+        self.graph_event_at = -1e9
         self.handles: dict = {}  # pane -> (surface_id, handle, frame index it was resolved at)
         self.perception: dict | None = None
         self.frames = 0
@@ -815,6 +839,20 @@ class ConsoleCompositor:
         self.next_frame_ns = 0
         self.fps_window: collections.deque = collections.deque(maxlen=70)
         self.last_witness = 0.0
+
+    def _freshness(self) -> list:
+        """One value per pane: 1.0 the instant a frame lands, fading over GLOW_SECONDS. A pane
+        fed at 12 Hz never fades, one fed at 1.5 Hz visibly pulses, an empty one stays dark."""
+        now = time.monotonic()
+        def age(name):
+            arrived = self.arrived.get(name)
+            if not arrived:
+                return 0.0
+            # Sharp falloff, so a 60 fps pane holds a steady rim, a 12 Hz one shimmers and a
+            # 1.5 Hz one is dark most of the time and blinks when its frame lands.
+            return max(0.0, 1.0 - (now - arrived) / GLOW_SECONDS) ** 2.0
+        graph = 1.0 if now - self.graph_event_at < 2.0 else age("graph")
+        return [graph, age("frame"), age("neural"), age("depth_trio"), age("detector"), age("map"), age("telemetry"), age("caption")]
 
     def _placeholder(self, gpu, w: int, h: int, text: str):
         texture = gpu.acquire_texture(w, h, "rgba8_unorm", ["texture_binding"])
@@ -876,7 +914,7 @@ class ConsoleCompositor:
         self._badges.lock(read_only=False)
         self._badges.as_numpy()[:, :, :] = badges
         self._badges.unlock()
-        self._kernel = gpu.create_compute_kernel(source=CONSOLE_GLSL, push_constant_size=48, bindings={
+        self._kernel = gpu.create_compute_kernel(source=CONSOLE_GLSL, push_constant_size=80, bindings={
             "game_frame": "sampled_texture", "palettes": "sampled_texture", "neural_pane": "sampled_texture", "depth_trio": "sampled_texture",
             "detector_pane": "sampled_texture", "map_pane": "sampled_texture", "telemetry": "sampled_texture", "graph_panel": "sampled_texture",
             "caption": "sampled_texture", "chrome": "sampled_texture", "badges": "sampled_texture", "output_image": "storage_image"})
@@ -919,6 +957,8 @@ class ConsoleCompositor:
             if bag is not None:
                 self.latest[name] = bag
                 self.arrived[name] = time.monotonic()
+                if name == "graph" and bag.get("event"):
+                    self.graph_event_at = time.monotonic()
         frame = ctx.inputs.read("frame_from_upstream")
         if frame is not None:
             self.arrived["frame"] = time.monotonic()
@@ -964,6 +1004,7 @@ class ConsoleCompositor:
                 source = ((frame.get("state") or {}).get("control_source")) or "idle"
                 badge = 0.0 if source == "autonomy" else (1.0 if source == "teleop" else 2.0)
                 neural_bag = self.latest.get("neural") or {}
+                fresh = self._freshness()
                 cur_pose = [float(x) for x in (frame.get("pose") or [0, 0, 0, 0])]
                 neu_pose = [float(x) for x in (neural_bag.get("pose") or [0, 0, 0, 0])]
                 reproject = 1.0 if (frame.get("pose") and neural_bag.get("pose") and REPROJECT) else 0.0
@@ -973,7 +1014,7 @@ class ConsoleCompositor:
                     "detector_pane": handles.get("detector") or self._blank["view"], "map_pane": handles.get("map") or self._blank["pane"],
                     "telemetry": handles.get("telemetry") or self._blank["telemetry"], "graph_panel": handles.get("graph") or self._blank["graph"],
                     "caption": handles.get("caption") or self._blank["caption"], "chrome": self._chrome, "badges": self._badges, "output_image": slot,
-                }, group_count=(OUT_W // 8, OUT_H // 8, 1), push_constants=struct.pack("<12f", float(frame.get("palette", 0)), badge, reproject, 0.0, *cur_pose, *neu_pose))
+                }, group_count=(OUT_W // 8, OUT_H // 8, 1), push_constants=struct.pack("<20f", float(frame.get("palette", 0)), badge, reproject, 0.0, *cur_pose, *neu_pose, *fresh))
         finally:
             pass
         t_dispatched = time.monotonic()

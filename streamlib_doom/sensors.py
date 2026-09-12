@@ -54,8 +54,8 @@ void main() {
 }
 """
 
-CLASS_COLORS = {0: (12, 12, 30), 1: (72, 96, 210), 2: (44, 170, 96), 3: (150, 84, 190), 4: (235, 44, 44), 5: (250, 222, 40), 6: (240, 140, 40), 7: (255, 255, 255)}
-CLASS_NAMES = {0: "sky", 1: "wall", 2: "floor", 3: "ceiling", 4: "monster", 5: "pickup", 6: "decoration", 7: "projectile"}
+CLASS_COLORS = {0: (12, 12, 30), 1: (72, 96, 210), 2: (44, 170, 96), 3: (150, 84, 190), 4: (235, 44, 44), 5: (250, 222, 40), 6: (240, 140, 40), 7: (255, 255, 255), 8: (120, 120, 120)}
+CLASS_NAMES = {0: "sky", 1: "wall", 2: "floor", 3: "ceiling", 4: "monster", 5: "pickup", 6: "decoration", 7: "projectile", 8: "hud"}
 
 
 def depth_lut() -> numpy.ndarray:

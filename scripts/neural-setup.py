@@ -22,7 +22,9 @@ if RERENDER not in RERENDER_TYPES:
 NODES = [  # name, type, (from, from_port) input, (to, to_port) output
     ("Lidar", "streamlib_doom.sensors:LidarScanner", ("Game", "world_to_downstream", "world_from_upstream"), ("scan_to_downstream", None, None)),
     ("Map", "streamlib_doom.sensors:OccupancyMapper", ("Lidar", "scan_to_downstream", "scan_from_upstream"), ("map_to_downstream", "Console", "map_from_upstream")),
-    ("Diffusion", RERENDER_TYPES[RERENDER], ("Render", "view_to_downstream", "view_from_upstream"), ("neural_to_downstream", "Console", "neural_from_upstream")),
+    # The finished frame, not the bare view: it carries the weapon and the status bar, and the HUD
+    # compositor marks those pixels with their own class so the re-render leaves them alone.
+    ("Diffusion", RERENDER_TYPES[RERENDER], ("HUD", "frame_to_downstream", "view_from_upstream"), ("neural_to_downstream", "Console", "neural_from_upstream")),
     ("DepthNet", "streamlib_doom.neural:NeuralDepth", ("Render", "view_to_downstream", "view_from_upstream"), ("depth_trio_to_downstream", "Console", "depth_trio_from_upstream")),
     ("Detector", "streamlib_doom.neural:MonsterDetector", ("Render", "view_to_downstream", "view_from_upstream"), ("detector_pane_to_downstream", "Console", "detector_from_upstream")),
     ("Repainter", "streamlib_doom.neural:Repainter", ("Game", "world_to_downstream", "world_from_upstream"), ("patches_to_downstream", "Render", "atlas_patch_from_upstream")),

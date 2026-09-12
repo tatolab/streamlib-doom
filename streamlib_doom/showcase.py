@@ -679,6 +679,8 @@ layout(push_constant) uniform PC { float palette; float badge; float reproject; 
 // A ring just outside a pane, lit for a moment when what feeds that pane was reconfigured — a
 // new style, a screen effect, a swapped model, a node added to the graph — so the eye goes to
 // what changed.
+const int HUD_CLASS = 8;
+
 bool on_ring(ivec2 at, int x0, int y0, int w, int h, int t) {
     bool outside = at.x < x0 - t || at.x >= x0 + w + t || at.y < y0 - t || at.y >= y0 + h + t;
     bool inside = at.x >= x0 && at.x < x0 + w && at.y >= y0 && at.y < y0 + h;
@@ -724,9 +726,10 @@ void main() {
     } else if (at.x >= 1264 && at.x < 1264 + 640 && at.y >= 64 && at.y < 64 + 480) {
         vec2 game_px = vec2((float(at.x - 1264) + 0.5) * 0.5, (float(at.y - 64) + 0.5) * (200.0 / 480.0));
         ivec2 src = ivec2(((at.x - 1264) * 512) / 640, ((at.y - 64) * 320) / 480);
-        if (pc.reproject > 0.5) {
-            float code = texelFetch(game_frame, ivec2(game_px), 0).g;
-            float z = 4.0 * exp2(code * 8.0);
+        vec4 under = texelFetch(game_frame, ivec2(game_px), 0);
+        bool is_hud = int(under.b * 255.0 + 0.5) == HUD_CLASS;  // the weapon and status bar do not move with the camera
+        if (pc.reproject > 0.5 && !is_hud) {
+            float z = 4.0 * exp2(under.g * 8.0);
             ivec2 moved = reprojected(game_px, z);
             if (moved.x >= 0) src = moved;  // otherwise the unmoved sample: a slight misalignment beats a streak
         }

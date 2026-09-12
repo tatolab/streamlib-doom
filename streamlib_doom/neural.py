@@ -54,7 +54,7 @@ STYLES = {
 # The renderer's surface classes painted in ADE20K's own colours, so a ControlNet trained on
 # ADE20K reads sky, wall, floor, ceiling and monster as the things they are.
 ADE_CLASS_COLORS = {0: (6, 230, 230), 1: (120, 120, 120), 2: (80, 50, 50), 3: (120, 120, 80),
-                    4: (150, 5, 61), 5: (255, 6, 82), 6: (204, 255, 4), 7: (224, 5, 255)}
+                    4: (150, 5, 61), 5: (255, 6, 82), 6: (204, 255, 4), 7: (224, 5, 255), 8: (0, 0, 0)}
 # Pushing off the game's own look is what lets the model replace the flat textures rather than
 # tint them. It needs guidance above 1 to apply at all, which costs a second pass per step.
 NEGATIVE_PROMPT = os.environ.get("STREAMLIB_DOOM_NEGATIVE_PROMPT",

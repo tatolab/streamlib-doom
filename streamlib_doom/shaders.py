@@ -256,16 +256,27 @@ layout(push_constant) uniform PC {
 } pc;
 
 const int VIEW_H = 168;
+const int HUD_CLASS = 8;
 
 void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
     if (at.x >= 320 || at.y >= 200) return;
+    // Depth and class are read at the row the colour came from, so all three channels describe the
+    // same pixel once the view is squashed into the viewport. A consumer that masks or reprojects on
+    // them would otherwise be working against a picture shifted by 200/168.
     int index;
+    float depth_code;
+    int surface_class;
     if (at.y < VIEW_H) {
         int src_y = (at.y * 200) / VIEW_H;
-        index = int(texelFetch(view_from_renderer, ivec2(at.x, src_y), 0).r * 255.0 + 0.5);
+        vec4 under = texelFetch(view_from_renderer, ivec2(at.x, src_y), 0);
+        index = int(under.r * 255.0 + 0.5);
+        depth_code = under.g;
+        surface_class = int(under.b * 255.0 + 0.5);
     } else {
         index = 0;
+        depth_code = 1.0;
+        surface_class = HUD_CLASS;
     }
     int draws = int(pc.draw_count);
     for (int n = 0; n < draws; n++) {
@@ -281,9 +292,9 @@ void main() {
             palette_index = int(texelFetch(colormap, ivec2(palette_index, int(pc.weapon_map_index)), 0).r * 255.0 + 0.5);
         }
         index = palette_index;
+        surface_class = HUD_CLASS;  // the weapon and the status bar are not part of the world
     }
-    vec4 under = texelFetch(view_from_renderer, at, 0);
-    imageStore(frame_image, at, vec4(float(index) / 255.0, under.g, under.b, 1.0));  // depth and class ride along for consumers that reproject
+    imageStore(frame_image, at, vec4(float(index) / 255.0, depth_code, float(surface_class) / 255.0, 1.0));
 }
 """
 
@@ -336,17 +347,28 @@ layout(set = 0, binding = 6, rgba8) uniform writeonly image2D frame_image;
 layout(push_constant) uniform PC { float draw_count; float weapon_map_index; float effect; float tick; } pc;
 
 const int VIEW_H = 168;
+const int HUD_CLASS = 8;
 int shade(int map_index, int palette_index) { return int(texelFetch(colormap, ivec2(palette_index, map_index), 0).r * 255.0 + 0.5); }
 
 void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
     if (at.x >= 320 || at.y >= 200) return;
+    // Depth and class are read at the row the colour came from, so all three channels describe the
+    // same pixel once the view is squashed into the viewport. A consumer that masks or reprojects on
+    // them would otherwise be working against a picture shifted by 200/168.
     int index;
+    float depth_code;
+    int surface_class;
     if (at.y < VIEW_H) {
         int src_y = (at.y * 200) / VIEW_H;
-        index = int(texelFetch(view_from_renderer, ivec2(at.x, src_y), 0).r * 255.0 + 0.5);
+        vec4 under = texelFetch(view_from_renderer, ivec2(at.x, src_y), 0);
+        index = int(under.r * 255.0 + 0.5);
+        depth_code = under.g;
+        surface_class = int(under.b * 255.0 + 0.5);
     } else {
         index = 0;
+        depth_code = 1.0;
+        surface_class = HUD_CLASS;
     }
     int draws = int(pc.draw_count);
     for (int n = 0; n < draws; n++) {
@@ -359,6 +381,7 @@ void main() {
         int palette_index = int(sample_.r * 255.0 + 0.5);
         if (d0.w > 0.5) palette_index = int(texelFetch(colormap, ivec2(palette_index, int(pc.weapon_map_index)), 0).r * 255.0 + 0.5);
         index = palette_index;
+        surface_class = HUD_CLASS;  // the weapon and the status bar are not part of the world
     }
     int mode = int(pc.effect);
     if (mode != 0) {
@@ -370,7 +393,6 @@ void main() {
             index = shade(darken, index);
         }
     }
-    vec4 under = texelFetch(view_from_renderer, at, 0);
-    imageStore(frame_image, at, vec4(float(index) / 255.0, under.g, under.b, 1.0));  // depth and class ride along for consumers that reproject
+    imageStore(frame_image, at, vec4(float(index) / 255.0, depth_code, float(surface_class) / 255.0, 1.0));
 }
 """

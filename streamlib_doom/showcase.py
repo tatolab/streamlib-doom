@@ -844,6 +844,20 @@ class ConsoleCompositor:
         self.fps_window: collections.deque = collections.deque(maxlen=70)
         self.last_witness = 0.0
 
+    def _draw_neural_banner(self, chrome, model: str) -> None:
+        chrome[46:68, 1264:1904, :] = 0
+        blit(chrome, render_text(f"NEURAL RE-RENDER  ·  {model}  ·  its own process", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 1264, 46)
+
+    def _follow_neural_model(self, model: str) -> None:
+        """The banner names whichever model is publishing, so swapping one cannot leave it lying."""
+        if not model or model == self._banner_model:
+            return
+        self._banner_model = model
+        self._draw_neural_banner(self._chrome_canvas, model)
+        self._chrome.lock(read_only=False)
+        self._chrome.as_numpy()[:, :, :] = self._chrome_canvas
+        self._chrome.unlock()
+
     def _freshness(self) -> list:
         """One value per pane: a few fading pulses after the pane's configuration changed, else 0."""
         now = time.monotonic()
@@ -890,7 +904,9 @@ class ConsoleCompositor:
         blit(chrome, render_text("·  DOOM E1M1 rebuilt in LEGO by a diffusion model, graded by its own renderer  ·  every box its own process", 1440, 30, 18, "rgb(160,170,190)", FONT), 456, 18)
         blit(chrome, render_text("LIVE GRAPH  ·  from this node's own /api/graph", 570, 22, 14, "rgb(150,160,180)", FONT_BOLD), 16, 46)
         blit(chrome, render_text("THE GAME  ·  1993, what the phone sees", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 608, 46)
-        blit(chrome, render_text("NEURAL RE-RENDER  ·  sd-turbo + ControlNet on the renderer's own depth  ·  its own process", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 1264, 46)
+        self._chrome_canvas = chrome
+        self._banner_model = ""
+        self._draw_neural_banner(chrome, "starting…")
         for i, name in enumerate(SENSOR_PANES):
             blit(chrome, render_text(SENSOR_TITLES[name], STRIP_W, 22, 13, "rgb(150,160,180)", FONT_BOLD), SENSOR_X[i], SENSOR_Y + 5)
             rect_border = numpy.zeros((STRIP_H + 2, STRIP_W + 2, 4), dtype=numpy.uint8)
@@ -902,6 +918,7 @@ class ConsoleCompositor:
             rect(border, 0, 0, size[0] + 2, size[1] + 2, (0, 0, 0), (40, 44, 58), 1)
             border[1:-1, 1:-1, 3] = 0
             blit(chrome, border, at[0] - 1, at[1] - 1)
+        self._gpu = gpu
         self._chrome = gpu.acquire_texture(OUT_W, OUT_H, "rgba8_unorm", ["texture_binding"])
         self._chrome.lock(read_only=False)
         self._chrome.as_numpy()[:, :, :] = chrome
@@ -1010,6 +1027,7 @@ class ConsoleCompositor:
                 source = ((frame.get("state") or {}).get("control_source")) or "idle"
                 badge = 0.0 if source == "autonomy" else (1.0 if source == "teleop" else 2.0)
                 neural_bag = self.latest.get("neural") or {}
+                self._follow_neural_model(str(neural_bag.get("model") or ""))
                 fresh = self._freshness()
                 cur_pose = [float(x) for x in (frame.get("pose") or [0, 0, 0, 0])]
                 neu_pose = [float(x) for x in (neural_bag.get("pose") or [0, 0, 0, 0])]

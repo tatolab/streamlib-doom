@@ -73,16 +73,18 @@ def main() -> int:
     caption("DOOM, RUNNING AS A STREAMLIB GRAPH", f"{nodes} processes on one GPU · every box on the left is one of them · the picture on the right is the graph's own")
     time.sleep(8)
 
-    # The robots: hold the marine still so the planner does not shoot them before they are seen.
-    director(command="control", mode="stop"); director(command="god", on=True)
-    for where in ("ahead", "left", "right"):  # across the room, not in your face: no fireballs filling the frame
-        director(command="spawn", kind="zombieman", count=3, where=where, distance=420)
-    time.sleep(3)
-    director(command="face")  # whichever way the marine was standing, the nearest one is now in shot
+    # The robots: the marine keeps moving and fighting; god mode keeps it alive, and the wave is
+    # topped up so there is always something tracked in shot.
+    # Disarmed, the planner keeps walking its route instead of stopping to fight, so the grunts
+    # have to keep arriving ahead of wherever it is facing now; god mode keeps it alive meanwhile.
+    director(command="god", on=True); director(command="give", item="disarm"); director(command="mission", goal="circle")
+    director(command="spawn", kind="zombieman", count=2, where="ahead", distance=300)
+    time.sleep(2)
     caption("THE OUTPUT TRACKS THE MONSTERS AND SWAPS THEM", "the renderer's own depth and class channels · one compute kernel · no model, no network")
-    time.sleep(5)
-    director(command="face")
-    time.sleep(6)
+    for _ in range(6):  # one pair ahead every two seconds: whichever way the circling marine faces, a robot is crossing at readable range
+        director(command="spawn", kind="zombieman", count=2, where="ahead", distance=300)
+        time.sleep(2)
+    director(command="mission", goal="patrol"); director(command="give", item="everything")
 
     # Treatments, one processor at a time, each a new box and a visibly different picture.
     tail = CHAIN_ROOT
@@ -90,6 +92,7 @@ def main() -> int:
     for name, treatment, blurb in (("Grade", "grade", "teal shadows, warm highlights"),
                                    ("Neon", "neon", "every edge a light tube"),
                                    ("Glitch", "glitch", "bands tear and the channels split")):
+        director(command="spawn", kind="zombieman", count=3, where="ahead", distance=420)  # something to fight under each look
         tail = splice(name, treatment, tail)
         added.append(name)
         caption(f"PROCESSOR ADDED · {name.upper()}", f"{blurb} · spliced into the running graph over MCP · nothing restarted")

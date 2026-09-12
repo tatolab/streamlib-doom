@@ -853,6 +853,9 @@ class Game:
             distance = max(64.0, min(900.0, float(command.get("distance", 128) or 128)))
             placed = self._spawn_monsters(kind, count, str(command.get("where", "behind")), distance)
             did = f"teleported {placed} {'zombieman' if kind == ZOMBIEMAN else 'imp'}{'s' if placed != 1 else ''} {command.get('where', 'behind')} the player"
+        elif verb == "give" and command.get("item") == "disarm":
+            p["bullets"], p["shells"] = 0, 0
+            did = "took the marine's ammunition away"
         elif verb == "give":
             item = str(command.get("item", "shotgun"))
             if item in ("shotgun", "everything"):

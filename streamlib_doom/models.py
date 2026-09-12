@@ -134,7 +134,7 @@ void main() {
         // camera-space stand point: x right, z forward, both in map units, scaled out of the texture
         vec3 base = vec3((m.r - 0.5) * 4096.0, -pc.eye_z, (m.g - 0.5) * 4096.0);
         float phase = m.a * 6.2831 + pc.tick * 0.12;
-        if (base.z < 1.0) continue;
+        if (base.z < 1.0 || length(base) < 90.0) continue;  // point-blank it would be a flat wall; leave the sprite
 
         float t = max(1.0, length(base) - MODEL_HEIGHT);
         for (int step = 0; step < 48; step++) {

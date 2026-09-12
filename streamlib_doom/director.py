@@ -33,7 +33,7 @@ class DirectorCommandConfig:
     count: Annotated[int, "For spawn: how many, 1 to 8."] = 1
     where: Annotated[Literal["behind", "ahead", "left", "right"], "For spawn: where, relative to the way the player faces."] = "behind"
     distance: Annotated[int, "For spawn: how far away in map units, 64 to 900. 128 is right in front; 400 is across the room, in shot but not in your face."] = 128
-    item: Annotated[Literal["shotgun", "health", "armor", "ammo", "everything"], "For give: what the player receives."] = "shotgun"
+    item: Annotated[Literal["shotgun", "health", "armor", "ammo", "everything", "disarm"], "For give: what the player receives; disarm takes all ammunition away so the planner keeps moving instead of fighting."] = "shotgun"
     effect: Annotated[Literal["none", "crt", "night_vision", "invulnerable", "thermal"], "For effect: the screen filter the compositor bakes into every frame."] = "night_vision"
     factor: Annotated[float, "For lights: 0.1 is nearly dark, 1.0 is the level as authored, 1.5 is overlit."] = 1.0
     text: Annotated[str, "For message: shown on the HUD's message line in Doom's font, up to 60 characters."] = ""

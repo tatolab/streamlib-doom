@@ -93,9 +93,9 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 
 ## The graph reel
 
-<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-graph.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/graph-neon.png" alt="the rendered output with a neon treatment spliced in, the graph on the left one box larger" width="900"></a>
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-live-graph.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/live-neon.png" alt="the rendered output with a neon treatment spliced in, the graph on the left one box larger" width="900"></a>
 
-**[Watch it](https://gh-artifact.tatolab.com/streamlib-doom/doom-graph.mp4)** · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-graph.gif) · stills: [robots](https://gh-artifact.tatolab.com/streamlib-doom/graph-robots.png) · [neon](https://gh-artifact.tatolab.com/streamlib-doom/graph-neon.png) · [glitch](https://gh-artifact.tatolab.com/streamlib-doom/graph-glitch.png) · [events](https://gh-artifact.tatolab.com/streamlib-doom/graph-events.png)
+**[Watch it](https://gh-artifact.tatolab.com/streamlib-doom/doom-live-graph.mp4)** · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-live-graph.gif) · stills: [robots](https://gh-artifact.tatolab.com/streamlib-doom/live-robots.png) · [neon](https://gh-artifact.tatolab.com/streamlib-doom/live-neon.png) · [glitch](https://gh-artifact.tatolab.com/streamlib-doom/live-glitch.png) · [events](https://gh-artifact.tatolab.com/streamlib-doom/live-events.png)
 
 The whole story in under two minutes, nothing pre-rendered, nothing restarted: the game as a
 graph, the monsters swapped for a tracked robot, three treatments spliced onto the output one

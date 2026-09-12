@@ -314,3 +314,57 @@ void main() {
     imageStore(scratch_image, at, texel);
 }
 """
+
+
+# The game compositor: COMPOSITOR_GLSL plus a final effect stage — an index remap
+# selected per frame, and crt scanlines/vignette — so one processor bakes the
+# director's screen effect into the frame the phone and the recorder both see.
+GAME_COMPOSITOR_GLSL = r"""#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D view_from_renderer;
+layout(set = 0, binding = 1) uniform sampler2D atlas;
+layout(set = 0, binding = 2) uniform sampler2D level;
+layout(set = 0, binding = 3) uniform sampler2D hud;
+layout(set = 0, binding = 4) uniform sampler2D colormap;
+layout(set = 0, binding = 5) uniform sampler2D effect_remap;   // 256 x modes
+layout(set = 0, binding = 6, rgba8) uniform writeonly image2D frame_image;
+layout(push_constant) uniform PC { float draw_count; float weapon_map_index; float effect; float tick; } pc;
+
+const int VIEW_H = 168;
+int shade(int map_index, int palette_index) { return int(texelFetch(colormap, ivec2(palette_index, map_index), 0).r * 255.0 + 0.5); }
+
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (at.x >= 320 || at.y >= 200) return;
+    int index;
+    if (at.y < VIEW_H) {
+        int src_y = (at.y * 200) / VIEW_H;
+        index = int(texelFetch(view_from_renderer, ivec2(at.x, src_y), 0).r * 255.0 + 0.5);
+    } else {
+        index = 0;
+    }
+    int draws = int(pc.draw_count);
+    for (int n = 0; n < draws; n++) {
+        vec4 d0 = texelFetch(hud, ivec2(n, 0), 0);
+        vec4 rect = texelFetch(level, ivec2(2 * int(d0.x), 3), 0);
+        int lx = at.x - int(d0.y), ly = at.y - int(d0.z);
+        if (lx < 0 || ly < 0 || lx >= int(rect.z) || ly >= int(rect.w)) continue;
+        vec4 sample_ = texelFetch(atlas, ivec2(int(rect.x) + lx, int(rect.y) + ly), 0);
+        if (sample_.g < 0.5) continue;
+        int palette_index = int(sample_.r * 255.0 + 0.5);
+        if (d0.w > 0.5) palette_index = int(texelFetch(colormap, ivec2(palette_index, int(pc.weapon_map_index)), 0).r * 255.0 + 0.5);
+        index = palette_index;
+    }
+    int mode = int(pc.effect);
+    if (mode != 0) {
+        index = int(texelFetch(effect_remap, ivec2(index, mode), 0).r * 255.0 + 0.5);
+        if (mode == 1 && at.y < VIEW_H) {                                  // crt over the view only
+            float dx = (float(at.x) - 160.0) / 160.0, dy = (float(at.y) - 84.0) / 84.0;
+            int darken = int(clamp((dx * dx + dy * dy) * 10.0, 0.0, 12.0));
+            if ((at.y & 1) == 1) darken += 5;
+            index = shade(darken, index);
+        }
+    }
+    imageStore(frame_image, at, vec4(float(index) / 255.0, 0.0, 0.0, 1.0));
+}
+"""

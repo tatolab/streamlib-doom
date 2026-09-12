@@ -8,7 +8,7 @@ Not a port of the Doom engine. The real E1M1 from the shareware WAD — its geom
 
 <img src="https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.gif" alt="E1M1 rendered by StreamLib" width="640">
 
-[Watch the recorded demo with audio](https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.mp4) · [Play it](#play-it-on-your-phone) · [How it works](#how-it-works) · [Record the demo](#record-the-demo) · [WebRTC](#webrtc-h264-over-whip-and-whep)
+[Watch the recorded demo](https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.mp4) · [Play it](#play-it-on-your-phone) · [Claude directs it live](#claude-directs-it-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
 
 </div>
 
@@ -53,6 +53,26 @@ To keep it running as a service that survives your terminal:
 scripts/install-service.sh       # a user-level systemd unit named streamlib-doom
 ```
 
+
+## Claude directs it live
+
+The node serves an MCP endpoint. So while you play on your phone, Claude — running as `claude -p` on the desktop — can **see** the game through the `exchange` and `tap` tools, **read** the player's state, and **change the running graph** by adding processors. It is a StreamLib graph; every stage is inspectable and mutable at runtime.
+
+<img src="https://gh-artifact.tatolab.com/streamlib-doom/doom-showcase.gif" alt="Claude directing DOOM live" width="900">
+
+The showcase node composites, at 1920×1080, the game the phone sees, the node's own live graph, and the transcript of what Claude is doing — and records the whole thing as an MP4 through StreamLib's own H.264 and Opus encoders:
+
+```bash
+STREAMLIB_DOOM_RECORDING=showcase.mp4 STREAMLIB_DOOM_AUTOPILOT=1 uv run streamlib run -f showcase.py
+./director.sh "look at the game, then switch to night vision and teleport four imps in behind them"
+```
+
+`director.sh` runs `claude -p` with the node's MCP server. Claude reads `/snapshot.png` and `/state.json`, then adds a `DirectorCommand` processor to the live graph — which appears in the graph panel, glowing, labelled *added by Claude* — and it fires its instruction into the game. The verbs: spawn monsters, give weapons, dim the lights, splice a screen effect (night vision, thermal, CRT, invulnerable) that the compositor bakes into every frame the phone and the recording see, post a HUD message, god mode, heal, autopilot. Each is documented in the node's own catalog at `GET /api/registry`, so an agent learns them without reading this repo.
+
+**[Watch the full 90-second showcase with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-showcase.mp4).** Every command in it is exactly what Claude issues; the recording is deterministic because the timeline is scripted, but the live `claude -p` path produces the same actions.
+
+Nothing about this is bolted on. The game is a processor, the renderer is a processor, Claude's commands are processors, and the panel showing all of them reads the node's real graph. Live graph mutation over a control plane is the thing StreamLib is for; DOOM is just a vivid way to see it.
+
 ## How it works
 
 ```
@@ -78,6 +98,10 @@ Each box is one `@processor` class in `streamlib_doom/`, running in its own chil
 | `demo_processors.py` | the scripted seventeen-second demo and the recording graph |
 | `wsserver.py` | RFC 6455 on the standard library, small enough to live in a processor |
 | `web/index.html` | the page: canvas, palettes, touch pads, Web Audio, optional WHEP |
+| `game.py` (director) | the verbs Claude drives: spawn, give, lights, effect, message, god, heal, autopilot |
+| `director.py` | `DirectorCommand`, a processor that fires one instruction into the game when added |
+| `effects.py` | the screen filters, as index remaps built from PLAYPAL and COLORMAP |
+| `showcase.py` | the graph panel, the transcript panel, and the 1920x1080 recording compositor |
 
 ## Record the demo
 

@@ -13,6 +13,7 @@ import random
 
 import numpy
 
+from . import script
 from .wad import Level, Wad
 
 TICRATE = 35
@@ -229,6 +230,14 @@ class Game:
         self.event_log: list[tuple[int, str]] = []
         self.random = random.Random(self.tick_count)
         self.level_complete = 0
+        self.light_factor = 1.0
+        self.effect = 0
+        self.director_seen: set[str] = set()
+        self.director_log: list[tuple[int, str]] = []
+        self.autopilot = False
+        self.autopilot_target: tuple[float, float] | None = None
+        self.autopilot_stuck = 0
+        self.autopilot_t = 0.0
 
     # -- tic -------------------------------------------------------------------------
     def tick(self, controls: dict) -> None:
@@ -246,13 +255,27 @@ class Game:
             return
         if p["dead"]:
             p["dead_tics"] += 1
-            if controls.get("fire") and p["dead_tics"] > TICRATE:
+            if (controls.get("fire") or (self.autopilot and p["dead_tics"] > 3 * TICRATE)) and p["dead_tics"] > TICRATE:
+                autopilot = self.autopilot
                 self.reset()
+                self.autopilot = autopilot
             self._tick_monsters()
             self._tick_projectiles()
             self._tick_sectors()
             self._decay_counters()
             return
+        if self.autopilot and not any(controls.get(k) for k in ("forward", "strafe", "turn", "fire", "use")):
+            self.autopilot_t += 1.0 / TICRATE
+            if self.autopilot_t < script.DEMO_SECONDS:
+                controls = self._scripted_controls()
+                if p["health"] < 60:
+                    p["health"] = 100
+            else:
+                controls = self._autopilot_controls()
+                moved = math.hypot(p["momx"], p["momy"])
+                self.autopilot_stuck = self.autopilot_stuck + 1 if moved < 1.0 else 0
+            if p["health"] < 75 and self.tick_count % 2 == 0:
+                p["health"] = min(100, p["health"] + 1)  # the reel's marine is hard to kill, not immortal
         self._tick_player(controls)
         self._tick_weapon(controls)
         self._tick_monsters()
@@ -633,7 +656,7 @@ class Game:
 
     def _damage_player(self, damage: int, attacker: dict | None) -> None:
         p = self.player
-        if p["dead"]:
+        if p["dead"] or p.get("god"):
             return
         if p["armor"] > 0:
             saved = damage // (3 if p["armor_type"] < 2 else 2)
@@ -796,6 +819,161 @@ class Game:
         self.effects = [e for e in self.effects if e["age"] < e["tics"] * len(e["frames"])]
         self.decorations = [d for d in self.decorations if d["exploding"] < 5 * 5]
 
+    # -- the director --------------------------------------------------------------------
+    def director(self, command: dict) -> str | None:
+        """One instruction from outside the game; returns what it did, for the record."""
+        nonce = str(command.get("nonce", ""))
+        if nonce and nonce in self.director_seen:
+            return None
+        self.director_seen.add(nonce)
+        p = self.player
+        verb = command.get("command")
+        did = None
+        if verb == "spawn":
+            kind = ZOMBIEMAN if command.get("kind") == "zombieman" else IMP
+            count = max(1, min(8, int(command.get("count", 1))))
+            placed = self._spawn_monsters(kind, count, str(command.get("where", "behind")))
+            did = f"teleported {placed} {'zombieman' if kind == ZOMBIEMAN else 'imp'}{'s' if placed != 1 else ''} {command.get('where', 'behind')} the player"
+        elif verb == "give":
+            item = str(command.get("item", "shotgun"))
+            if item in ("shotgun", "everything"):
+                p["weapons"].add(WEAPON_SHOTGUN)
+                p["shells"] = 50
+                p["pending"] = WEAPON_SHOTGUN if p["ready"] != WEAPON_SHOTGUN else None
+                self._set_face(f"STFEVL{self._face_row()}", 8, 2 * TICRATE)
+            if item in ("health", "everything"):
+                p["health"] = 100
+            if item in ("armor", "everything"):
+                p["armor"], p["armor_type"] = 200, 2
+            if item in ("ammo", "everything"):
+                p["bullets"], p["shells"] = 200, 50
+            p["bonus_count"] += 12
+            self.events.append("DSWPNUP" if item in ("shotgun", "everything") else "DSITEMUP")
+            did = f"gave the player {item}"
+        elif verb == "lights":
+            self.light_factor = max(0.05, min(1.5, float(command.get("factor", 1.0))))
+            did = f"set the lights to {self.light_factor:.2f}"
+        elif verb == "message":
+            self._say(str(command.get("text", ""))[:60])
+            did = "posted a message"
+        elif verb == "god":
+            p["god"] = bool(command.get("on", True))
+            did = "god mode " + ("on" if p["god"] else "off")
+        elif verb == "heal":
+            p["health"], p["armor"] = 100, max(p["armor"], 100)
+            p["armor_type"] = max(p["armor_type"], 1)
+            p["bonus_count"] += 12
+            self.events.append("DSITEMUP")
+            did = "healed the player"
+        elif verb == "autopilot":
+            self.autopilot = bool(command.get("on", True))
+            did = "autopilot " + ("on" if self.autopilot else "off")
+        elif verb == "effect":
+            from .effects import MODES
+            name = str(command.get("effect", "none"))
+            self.effect = MODES.get(name, 0)
+            did = f"set the screen effect to {name}"
+        if did:
+            self.director_log.append((self.tick_count, did))
+            self.director_log = self.director_log[-8:]
+            if verb != "message":
+                self._say(("DIRECTOR: " + did)[:60])
+        return did
+
+    def _spawn_monsters(self, kind: int, count: int, where: str) -> int:
+        p = self.player
+        spec = MONSTER[kind]
+        base = {"behind": math.pi, "ahead": 0.0, "left": math.pi / 2, "right": -math.pi / 2}.get(where, math.pi)
+        placed = 0
+        for i in range(count):
+            wanted = p["angle"] + base + (i - (count - 1) / 2) * 0.35
+            x, y, sector = p["x"], p["y"], p["sector"]
+            # Walk out from the player so nothing is ever placed inside a wall; when the
+            # asked-for direction is a wall, try the others before giving up.
+            for offset in (0.0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3.1):
+                bearing = wanted + offset
+                x, y, sector = p["x"], p["y"], p["sector"]
+                for _step in range(int((128 + 32 * (i % 3)) / 8)):
+                    nx, ny = self.move_actor(x, y, x + math.cos(bearing) * 8.0, y + math.sin(bearing) * 8.0, spec["radius"], sector, False)
+                    if (abs(nx - x) + abs(ny - y)) < 1.0:
+                        break
+                    x, y = nx, ny
+                    sector = self.sector_at(x, y)
+                if math.hypot(x - p["x"], y - p["y"]) >= 64:
+                    break
+            if math.hypot(x - p["x"], y - p["y"]) < 48:
+                continue
+            self.monsters.append(dict(kind=kind, x=x, y=y, z=float(self.floors[sector]), angle=math.atan2(p["y"] - y, p["x"] - x), sector=sector,
+                                      health=spec["health"], state="chase", frame="A", state_tics=0, move_tics=0, move_angle=0.0,
+                                      alive=True, ambush=False, attack_step=0, radius=spec["radius"]))
+            self.effects.append(dict(prefix="TFOG", frames="ABCDEFGHIJ", tics=6, x=x, y=y, z=float(self.floors[sector]) + 24.0, age=0, fullbright=True))
+            placed += 1
+        if placed:
+            self.events.append("DSTELEPT")
+        return placed
+
+    def _scripted_controls(self) -> dict:
+        """The demo's route through the hangar, courtyard and first fight, as a pose the
+        marine is moved to directly, shooting whatever walks into the crosshair."""
+        p = self.player
+        x, y, angle = script.pose_at(self.autopilot_t)
+        p["momx"], p["momy"] = x - p["x"], y - p["y"]
+        p["x"], p["y"], p["angle"] = x, y, angle
+        controls = {"forward": 0.0, "strafe": 0.0, "turn": 0.0, "fire": 0, "use": 0, "weapon": 0}
+        # A threat in the front half takes the marine's eye off the route, and the shot.
+        nearest = None
+        for m in self.monsters:
+            if not m["alive"] or m["state"] == "idle":
+                continue
+            d = math.hypot(m["x"] - p["x"], m["y"] - p["y"])
+            delta = (math.atan2(m["y"] - p["y"], m["x"] - p["x"]) - p["angle"] + math.pi) % (2 * math.pi) - math.pi
+            if d < 900 and abs(delta) < math.radians(75) and (nearest is None or d < nearest[0]) and self.line_of_sight(p["x"], p["y"], p["z"] + VIEW_HEIGHT, m["x"], m["y"], m["z"] + 32):
+                nearest = (d, m)
+        if nearest is not None:
+            m = nearest[1]
+            p["angle"] = math.atan2(m["y"] - p["y"], m["x"] - p["x"]) + self.random.uniform(-0.02, 0.02)
+            controls["fire"] = 1
+        return controls
+
+    def _autopilot_controls(self) -> dict:
+        """Walk the level and shoot what walks into view, for a demo with no hand on it."""
+        p = self.player
+        controls = {"forward": 0.0, "strafe": 0.0, "turn": 0.0, "fire": 0, "use": 0, "weapon": 0}
+        target = self.autopilot_target
+        if target is None or math.hypot(target[0] - p["x"], target[1] - p["y"]) < 48 or self.autopilot_stuck > 40:
+            candidates = [(it["x"], it["y"]) for it in self.items] + [(m["x"], m["y"]) for m in self.monsters if m["alive"]]
+            reachable = [c for c in candidates if 200 < math.hypot(c[0] - p["x"], c[1] - p["y"]) < 900
+                         and self.line_of_sight(p["x"], p["y"], p["z"] + VIEW_HEIGHT, c[0], c[1], self.floors[self.sector_at(*c)] + 32)]
+            self.autopilot_target = target = self.random.choice(reachable) if reachable else (self.random.choice(candidates) if candidates else None)
+            self.autopilot_stuck = 0
+        threat = None
+        for m in self.monsters:
+            if not m["alive"]:
+                continue
+            d = math.hypot(m["x"] - p["x"], m["y"] - p["y"])
+            if d < 900 and self.line_of_sight(p["x"], p["y"], p["z"] + VIEW_HEIGHT, m["x"], m["y"], m["z"] + 32) and (threat is None or d < threat[0]):
+                threat = (d, m)
+        aim = (threat[1]["x"], threat[1]["y"]) if threat else target
+        if self.autopilot_stuck > 20 and not threat:
+            # Stuck against something: swing away and push, rather than lean on the wall.
+            if self.autopilot_stuck == 21:
+                self.autopilot_escape = p["angle"] + self.random.choice((math.pi / 2, -math.pi / 2, math.pi))
+            wanted = self.autopilot_escape
+            delta = (wanted - p["angle"] + math.pi) % (2 * math.pi) - math.pi
+            controls["turn"] = -math.degrees(max(-6.0, min(6.0, math.degrees(delta) * 0.5)))
+            controls["forward"] = 1.0 if abs(delta) < math.radians(30) else 0.0
+            return controls
+        if aim is not None:
+            wanted = math.atan2(aim[1] - p["y"], aim[0] - p["x"])
+            delta = (wanted - p["angle"] + math.pi) % (2 * math.pi) - math.pi
+            controls["turn"] = -math.degrees(max(-4.5, min(4.5, math.degrees(delta) * 0.35)))
+            if threat:
+                controls["fire"] = 1 if abs(delta) < math.radians(6) else 0
+                controls["forward"] = 0.35 if threat[0] > 300 else 0.0
+            else:
+                controls["forward"] = 1.0 if abs(delta) < math.radians(40) else 0.2
+        return controls
+
     # -- lighting --------------------------------------------------------------------
     def sector_lights(self) -> list[float]:
         lights = []
@@ -820,6 +998,8 @@ class Game:
                 lights.append(max(low, light - self.random.randint(0, 3) * 16))
             else:
                 lights.append(light)
+        if self.light_factor != 1.0:
+            lights = [max(16.0, min(255.0, value * self.light_factor)) for value in lights]
         return lights
 
     # -- the bag every frame is drawn from --------------------------------------------
@@ -871,4 +1051,12 @@ class Game:
                 "kills": p["kills"], "monsters": len(self.monsters), "complete": self.level_complete > 0,
             },
             "palette": palette, "events": list(self.events), "event_log": event_log[-64:],
+            "state": {
+                "x": round(p["x"]), "y": round(p["y"]), "angle_degrees": round(math.degrees(p["angle"]) % 360), "sector": p["sector"],
+                "health": p["health"], "armor": p["armor"], "bullets": p["bullets"], "shells": p["shells"], "weapon": p["ready"],
+                "dead": p["dead"], "kills": p["kills"], "monsters_alive": sum(1 for m in self.monsters if m["alive"]),
+                "monsters_awake": sum(1 for m in self.monsters if m["alive"] and m["state"] != "idle"),
+                "lights": self.light_factor, "god": bool(p.get("god")), "autopilot": self.autopilot, "effect": self.effect,
+                "director_log": [text for _t, text in self.director_log],
+            },
         }

@@ -20,6 +20,8 @@ from streamlib import H264Encoder, OpusEncoder, Runtime
 
 from streamlib_doom.demo_processors import PaletteUpscaler
 from streamlib_doom.processors import BrowserFrameSender, DoomAudioMixer, DoomGame, E1M1GameRenderer, GameStatusBarCompositor
+import streamlib_doom.director  # noqa: F401 — DirectorCommand joins the catalog for an agent to add over MCP
+import streamlib_doom.effects  # noqa: F401 — so does ScreenEffect
 
 
 def setup(rt: Runtime) -> None:

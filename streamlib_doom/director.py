@@ -1,0 +1,67 @@
+"""One instruction to the running game, as a processor an agent adds over MCP.
+
+The catalog serves this class's config schema, so an agent holding only the
+node's URL learns the verbs from `/api/registry`: add a `DirectorCommand` with
+the command in its config, connect its `command` output to the game's
+`director_from_upstream`, and the game does it. It publishes its instruction
+for two seconds — long enough to cover a link wired after its setup — then
+idles, and can be removed.
+"""
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+import urllib.request
+from typing import Annotated, Literal
+
+from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess, log, output, processor
+
+DIRECTOR_ENDPOINT = os.environ.get("STREAMLIB_DOOM_DIRECTOR_URL", "http://127.0.0.1:8668/director")
+
+
+@dataclasses.dataclass
+class DirectorCommandConfig:
+    command: Annotated[
+        Literal["spawn", "give", "lights", "effect", "message", "god", "heal", "autopilot"],
+        "What to do: spawn monsters, give the player things, set the lights, set a screen effect, post a message, god mode, heal, or hand the marine to the autopilot.",
+    ]
+    kind: Annotated[Literal["imp", "zombieman"], "For spawn: which monster."] = "imp"
+    count: Annotated[int, "For spawn: how many, 1 to 8."] = 1
+    where: Annotated[Literal["behind", "ahead", "left", "right"], "For spawn: where, relative to the way the player faces."] = "behind"
+    item: Annotated[Literal["shotgun", "health", "armor", "ammo", "everything"], "For give: what the player receives."] = "shotgun"
+    effect: Annotated[Literal["none", "crt", "night_vision", "invulnerable", "thermal"], "For effect: the screen filter the compositor bakes into every frame."] = "night_vision"
+    factor: Annotated[float, "For lights: 0.1 is nearly dark, 1.0 is the level as authored, 1.5 is overlit."] = 1.0
+    text: Annotated[str, "For message: shown on the HUD's message line in Doom's font, up to 60 characters."] = ""
+    on: Annotated[bool, "For god and autopilot: on or off."] = True
+
+
+@processor(
+    execution="manual",
+    description="Fires one instruction into the running DOOM game the moment it is added: spawn monsters behind the player, give them the shotgun, dim the lights, set a screen effect, post a message, god mode, heal, autopilot. Just `add_processor` it with a config; it delivers over the game's control endpoint and needs no link. Remove it afterwards.",
+)
+class DirectorCommand:
+    def __init__(self, config: DirectorCommandConfig) -> None:
+        self.command = dataclasses.asdict(config)
+
+    @output()
+    def command_to_game(self) -> None: ...
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        # Delivered from this helper process over HTTP, so it never depends on an
+        # engine link wired after the game's setup — it lands whether or not this
+        # processor is ever connected to anything.
+        import time
+        for attempt in range(20):
+            try:
+                request = urllib.request.Request(DIRECTOR_ENDPOINT, data=json.dumps(self.command).encode(), headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    log.info(f"MARKER:DIRECTOR_SENT {response.status} {json.dumps(self.command)}")
+                return
+            except Exception as failure:
+                last = failure
+                time.sleep(0.5)
+        log.info(f"MARKER:DIRECTOR_FAILED {last!r}")
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        pass

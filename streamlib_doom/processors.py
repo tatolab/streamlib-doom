@@ -14,6 +14,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy
 
+import queue as _queue
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 from streamlib import ProcessorOutputTextureRing, RuntimeContextFullAccess, RuntimeContextLimitedAccess, clock, input, log, output, processor
 
 from . import shaders
@@ -25,7 +29,8 @@ from .wad import Wad
 
 CONTROLS_PORT = 8667
 PAGE_PORT = 8666
-GAME_PREFIXES = sorted(set(DEMO_PREFIXES) | {"BAL1", "BLUD", "PUFF", "BEXP", "ARM2", "ROCK", "CBRA", "CAND", "COLU", "SBOX", "AMMO"})
+DIRECTOR_PORT = 8668
+GAME_PREFIXES = sorted(set(DEMO_PREFIXES) | {"BAL1", "BLUD", "PUFF", "BEXP", "ARM2", "ROCK", "CBRA", "CAND", "COLU", "SBOX", "AMMO", "TFOG"})
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +44,9 @@ class DoomGame:
     @output()
     def world_to_downstream(self) -> None: ...
 
+    @input(delivery_profile="ordered")
+    def director_from_upstream(self) -> None: ...
+
     def __init__(self) -> None:
         self.controls = {"forward": 0.0, "strafe": 0.0, "turn": 0.0, "fire": 0, "use": 0, "weapon": 0}
         self.turn_accumulated = 0.0
@@ -50,6 +58,8 @@ class DoomGame:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         wad = Wad()
         self.game = Game(wad, wad.level("E1M1"))
+        self.director_queue: "_queue.Queue[dict]" = _queue.Queue()
+        self._start_control_server()
 
         def on_message(message: dict) -> None:
             with self.lock:
@@ -68,13 +78,84 @@ class DoomGame:
                     self.controls.update(forward=0.0, strafe=0.0, fire=0, use=0)
 
         wsserver.serve_controls(CONTROLS_PORT, on_message, on_client_change)
-        _log("GAME_SETUP", controls_port=CONTROLS_PORT, monsters=len(self.game.monsters))
+        _log("GAME_SETUP", controls_port=CONTROLS_PORT, director_port=DIRECTOR_PORT, monsters=len(self.game.monsters))
+
+    def _start_control_server(self) -> None:
+        """An HTTP endpoint the director drives with one curl — the reliable path,
+        needing no link wired after this processor's setup. Every command the
+        game's `director()` understands is a POST /director with that JSON body,
+        or a plain `GET /director?command=spawn&kind=imp&count=3`."""
+        director_queue = self.director_queue
+        import json as _json
+        import urllib.parse as _urlparse
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:
+                pass
+
+            def _reply(self, code: int, body: dict) -> None:
+                payload = _json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def _enqueue(self, command: dict) -> None:
+                director_queue.put(command)
+                self._reply(200, {"accepted": command})
+
+            def do_GET(self) -> None:
+                parsed = _urlparse.urlparse(self.path)
+                if parsed.path == "/director":
+                    fields = {k: v[0] for k, v in _urlparse.parse_qs(parsed.query).items()}
+                    for numeric in ("count", "factor"):
+                        if numeric in fields:
+                            fields[numeric] = float(fields[numeric]) if numeric == "factor" else int(float(fields[numeric]))
+                    if "on" in fields:
+                        fields["on"] = fields["on"].lower() in ("1", "true", "yes", "on")
+                    self._enqueue(fields)
+                else:
+                    self._reply(404, {"error": "POST or GET /director"})
+
+            def do_POST(self) -> None:
+                if _urlparse.urlparse(self.path).path != "/director":
+                    self._reply(404, {"error": "POST /director"})
+                    return
+                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    command = _json.loads(self.rfile.read(length).decode() or "{}")
+                except ValueError:
+                    self._reply(400, {"error": "body must be JSON"})
+                    return
+                self._enqueue(command)
+
+        server = ThreadingHTTPServer(("0.0.0.0", DIRECTOR_PORT), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # 35 tics a second against the monotonic clock, whatever cadence the helper calls at.
         now = clock.monotonic_now_ns()
         if self.next_tick_ns == 0:
             self.next_tick_ns = now
+        while True:
+            command = ctx.inputs.read("director_from_upstream")
+            if command is None:
+                break
+            did = self.game.director(command)
+            if did:
+                _log("DIRECTOR", did=did, via="link")
+        while not self.director_queue.empty():
+            try:
+                command = self.director_queue.get_nowait()
+            except _queue.Empty:
+                break
+            command.setdefault("nonce", "http-" + str(clock.monotonic_now_ns()))
+            did = self.game.director(command)
+            if did:
+                _log("DIRECTOR", did=did, via="http")
         ticked = 0
         while now >= self.next_tick_ns and ticked < 4:
             with self.lock:
@@ -195,7 +276,7 @@ class E1M1GameRenderer(_GpuStage):
             bindings={"atlas": self._atlas_texture, "level": self._level_texture, "dynamic": self._dynamic_texture,
                       "colormap": self._colormap_texture, "view_image": slot},
             group_count=(VIEW_W // 32, 1, 1), push_constants=push)
-        ctx.outputs.write("view_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, hud=world["hud"], palette=world["palette"],
+        ctx.outputs.write("view_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, hud=world["hud"], palette=world["palette"], state=world["state"],
                                                            event_log=world["event_log"], sector_light=world["lights"][world["sector"]],
                                                            extralight=world["extralight"], tick=world["tick"]))
         self.frames += 1
@@ -230,10 +311,18 @@ class GameStatusBarCompositor(_GpuStage):
         gpu = ctx.gpu_full_access
         self._upload_shared(gpu)
         self._hud_texture = gpu.acquire_texture(256, 1, "rgba32_float", ["texture_binding"])
+        from .effects import build_all_remaps
+        remaps = build_all_remaps(self.shared.wad)
+        self._effect_remap = gpu.acquire_texture(256, remaps.shape[0], "rgba8_unorm", ["texture_binding"])
+        self._effect_remap.lock(read_only=False)
+        er = self._effect_remap.as_numpy()
+        er[:, :, 0] = remaps
+        er[:, :, 3] = 255
+        self._effect_remap.unlock()
         self._kernel = gpu.create_compute_kernel(
-            source=shaders.COMPOSITOR_GLSL, push_constant_size=16,
+            source=shaders.GAME_COMPOSITOR_GLSL, push_constant_size=16,
             bindings={"view_from_renderer": "sampled_texture", "atlas": "sampled_texture", "level": "sampled_texture",
-                      "hud": "sampled_texture", "colormap": "sampled_texture", "frame_image": "storage_image"})
+                      "hud": "sampled_texture", "colormap": "sampled_texture", "effect_remap": "sampled_texture", "frame_image": "storage_image"})
         self.anchor = {2: self.shared.wad.patch("PISGA0"), 3: self.shared.wad.patch("SHTGA0")}
         _log("COMPOSITOR_SETUP")
 
@@ -313,13 +402,15 @@ class GameStatusBarCompositor(_GpuStage):
         lightnum = min(15, (int(view["sector_light"]) >> 4) + int(view["extralight"]))
         weapon_map = max(0, min(31, (15 - lightnum) * 4 - 20))
         slot = self._ring.next_texture_for_this_frame(ctx.gpu_limited_access, VIEW_W, VIEW_H)
+        effect_index = float((view.get("state") or {}).get("effect", 0))
         with ctx.gpu_limited_access.resolve_surface(view["surface_id"]) as upstream:
             self._kernel.dispatch(
                 bindings={"view_from_renderer": upstream, "atlas": self._atlas_texture, "level": self._level_texture,
-                          "hud": self._hud_texture, "colormap": self._colormap_texture, "frame_image": slot},
+                          "hud": self._hud_texture, "colormap": self._colormap_texture, "effect_remap": self._effect_remap, "frame_image": slot},
                 group_count=(VIEW_W // 8, VIEW_H // 8, 1),
-                push_constants=struct.pack("<4f", float(min(len(draws), 200)), float(weapon_map), 0.0, 0.0))
-        ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], event_log=view["event_log"], tick=view["tick"]))
+                push_constants=struct.pack("<4f", float(min(len(draws), 200)), float(weapon_map), effect_index, float(view.get("tick", 0))))
+        ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], event_log=view["event_log"], tick=view["tick"],
+                                                            state=view["state"], hud={k: hud[k] for k in ("bullets", "shells", "health", "armor", "ready", "face", "message", "dead", "kills")}))
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
             _log("COMPOSITOR_FRAME", frames=self.frames, draws=len(draws))
@@ -338,11 +429,17 @@ class BrowserFrameSender:
         self.frames = 0
         self.last_event_tick = -1
         self.broadcaster = wsserver.Broadcaster()
+        self.latest_indices: bytes = bytes(VIEW_W * VIEW_H)
+        self.latest_palette = 0
+        self.latest_state: dict = {}
+        self.palette_table = None
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         wad = Wad()
         page = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html"), "rb").read()
         palettes = wad.palettes().tobytes()
+        self.palette_table = wad.palettes()
+        bridge = self
         score = synth.render_score(wad, "D_E1M1", 96.0)
         mono = ((score[:, 0] + score[:, 1]) * 0.5)
         mono = mono[::2][: len(mono) // 2]  # 24 kHz is plenty for an FM score, and a quarter of the bytes
@@ -389,6 +486,10 @@ class BrowserFrameSender:
                     body, content_type = page, "text/html; charset=utf-8"
                 elif self.path == "/config.json":
                     body, content_type = json.dumps({"whep_url": os.environ.get("STREAMLIB_WHEP_URL", "")}).encode(), "application/json"
+                elif self.path == "/state.json":
+                    body, content_type = json.dumps(bridge.latest_state).encode(), "application/json"
+                elif self.path == "/snapshot.png":
+                    body, content_type = bridge.snapshot_png(), "image/png"
                 elif self.path == "/palettes.bin":
                     body, content_type = palettes, "application/octet-stream"
                 elif self.path == "/music.wav":
@@ -418,12 +519,16 @@ class BrowserFrameSender:
         if latest.get("event_log"):
             self.last_event_tick = max(self.last_event_tick, max(tick for tick, _ in latest["event_log"]))
         self.frames += 1
-        if self.broadcaster.count() == 0:
+        if self.broadcaster.count() == 0 and self.frames % 7 != 0:
             return
         with ctx.gpu_limited_access.resolve_surface(latest["surface_id"]) as surface:
             surface.lock()
             indices = surface.as_numpy()[:VIEW_H, :VIEW_W, 0].tobytes()
             surface.unlock()
+        self.latest_indices, self.latest_palette = indices, int(latest.get("palette", 0))
+        self.latest_state = {**(latest.get("state") or {}), "hud": latest.get("hud") or {}, "tick": latest.get("tick")}
+        if self.broadcaster.count() == 0:
+            return
         compressor = zlib.compressobj(1, zlib.DEFLATED, -15)
         payload = bytes([int(latest.get("palette", 0)) & 0xFF, 1]) + compressor.compress(indices) + compressor.flush()
         self.broadcaster.send(wsserver.binary_frame(payload))
@@ -431,6 +536,24 @@ class BrowserFrameSender:
             self.broadcaster.send(wsserver.text_frame(json.dumps({"events": events})))
         if self.frames in (1, 35, 35 * 60):
             _log("BRIDGE_FRAME", frames=self.frames, bytes=len(payload), clients=self.broadcaster.count())
+
+
+def _png_bytes(rgb: numpy.ndarray) -> bytes:
+    height, width = rgb.shape[:2]
+    raw = b"".join(b"\0" + rgb[y].tobytes() for y in range(height))
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")
+
+
+def _snapshot_png(bridge) -> bytes:
+    indices = numpy.frombuffer(bridge.latest_indices, dtype=numpy.uint8).reshape(VIEW_H, VIEW_W)
+    rgb = bridge.palette_table[bridge.latest_palette][indices]
+    rgb = numpy.repeat(numpy.repeat(rgb, 2, axis=0), 2, axis=1)  # 640x400, readable at a glance
+    return _png_bytes(numpy.ascontiguousarray(rgb))
+
+
+BrowserFrameSender.snapshot_png = _snapshot_png
 
 
 def _wav_bytes(samples: numpy.ndarray, rate: int) -> bytes:

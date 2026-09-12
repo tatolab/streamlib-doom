@@ -30,6 +30,7 @@ PANE_W, PANE_H = 360, 225
 GRAPH_W, GRAPH_H = 576, 480
 # The event feed sits under the graph, so the boxes and what they noticed read as one column.
 EVENT_FEED_H = 150
+DIRECTOR_STALE_S = float(os.environ.get("STREAMLIB_DOOM_DIRECTOR_STALE_S", "600"))
 EVENT_FEED_URL = os.environ.get("STREAMLIB_DOOM_TRANSCRIPT_URL", "http://127.0.0.1:8670/transcript?tail=6")
 EVENT_KIND_COLORS = {"contact": (120, 200, 255), "damage": (255, 120, 110), "kill": (255, 200, 90),
                      "pickup": (150, 230, 150), "director": (255, 200, 80), "control": (200, 170, 255),
@@ -502,9 +503,18 @@ class CaptionPanel(_PanelPublisher):
         self.last_key = None
         self.canvas = None
         self.frames = 0
+        self.events: list = []
+        self.events_at = 0.0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         log.info(f"MARKER:CAPTION_PANEL_SETUP pid={os.getpid()}")
+
+    def _poll_events(self) -> None:
+        try:
+            with urllib.request.urlopen(EVENT_FEED_URL.replace("tail=6", "tail=7"), timeout=0.4) as answer:
+                self.events = json.loads(answer.read()).get("lines", [])
+        except Exception:
+            pass
 
     def _read_caption(self) -> tuple[str, str]:
         try:
@@ -517,6 +527,8 @@ class CaptionPanel(_PanelPublisher):
 
     def _read_transcript(self) -> tuple[str, str]:
         try:
+            if time.time() - os.path.getmtime(TRANSCRIPT_PATH) > DIRECTOR_STALE_S:
+                return "", ""  # an exchange from a session ago is not what the director is doing now
             text = open(TRANSCRIPT_PATH, encoding="utf-8").read()
         except OSError:
             return "", ""
@@ -530,9 +542,14 @@ class CaptionPanel(_PanelPublisher):
         return prompt, answer
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        now = time.monotonic()
+        if now - self.events_at > 0.5:
+            self.events_at = now
+            threading.Thread(target=self._poll_events, name="caption-events", daemon=True).start()
         big, small = self._read_caption()
         prompt, answer = self._read_transcript()
-        key = (big, small, prompt, answer[:400])
+        feed = tuple((e.get("n"), e.get("text")) for e in self.events[-7:]) if not big else ()
+        key = (big, small, prompt, answer[:400], feed)
         if key != self.last_key or self.canvas is None:
             canvas = numpy.zeros((CAPTION_H, CAPTION_W, 4), dtype=numpy.uint8)
             canvas[:, :, :3] = (12, 13, 18)
@@ -544,6 +561,15 @@ class CaptionPanel(_PanelPublisher):
             if small:
                 size = next((size for size in (26, 23, 20, 18) if len(small) * size * 0.62 <= 1110), 16)
                 blit(canvas, render_text(small, 1120, 40, size, "rgb(180,190,210)", FONT), 22, 104 + (26 - size) // 2)
+            if not big:
+                # With no caption up, this is the event feed at reading size: what the graph just saw.
+                blit(canvas, render_text("EVENTS  ·  written by the graph as it happens, read by the agent", 1120, 26, 17, "rgb(150,160,180)", FONT_BOLD), 20, 12)
+                y = 42
+                for entry in self.events[-7:]:
+                    colour = EVENT_KIND_COLORS.get(str(entry.get("kind", "")), (200, 210, 225))
+                    blit(canvas, render_text(f"{float(entry.get('t', 0)):7.1f}s", 90, 28, 17, "rgb(110,120,140)", FONT), 20, y)
+                    blit(canvas, render_text(str(entry.get("text", ""))[:80], 1010, 28, 20, f"rgb({colour[0]},{colour[1]},{colour[2]})", FONT), 118, y - 1)
+                    y += 29
             x = 1180
             line(canvas, x - 22, 14, x - 22, CAPTION_H - 14, (40, 44, 58), 2)
             blit(canvas, render_text("GAME DIRECTOR  ·  MCP", 700, 26, 19, "rgb(255,200,80)", FONT_BOLD), x, 8)

@@ -31,22 +31,29 @@ COMPILE = os.environ.get("STREAMLIB_DOOM_COMPILE", "1") == "1"
 HF_MODELS = {
     "diffusion": "stabilityai/sd-turbo",
     "controlnet": "thibaud/controlnet-sd21-depth-diffusers",
+    "controlnet_seg": "thibaud/controlnet-sd21-ade20k-diffusers",
     "vae": "madebyollin/taesd",
     "depth": "depth-anything/Depth-Anything-V2-Small-hf",
     "detector": "IDEA-Research/grounding-dino-base",
 }
+# Composed scenes rather than keyword lists: a subject, its materials, the light and the lens.
+# The subject stays the room itself, because the rendered frame already fixes what is in shot.
 STYLES = {
-    "lego": "a first-person view of a video game level built entirely out of lego bricks, bright primary colors, glossy plastic studs, lego minifigure monsters, toy photography, studio lighting, sharp focus",
-    "cyberpunk": "cyberpunk blade runner corridor, rain and neon haze, hot pink and electric cyan signage glowing on dark wet concrete, chrome panelling, holographic adverts, anamorphic flare, cinematic night photography, richly detailed",
-    "bladerunner": "blade runner 2049 film still, rain-slicked neon corridor, dense volumetric fog, towering cyan and magenta neon signage, wet reflective floor, brutalist concrete and chrome, anamorphic lens flare, cinematic teal and orange grade, moody",
-    "night_city": "cyberpunk 2077 screenshot, night city interior, saturated neon signage, holographic advertisements, chrome and carbon fibre panels, magenta and cyan rim light, grimy futuristic industrial corridor, high detail",
-    "photoreal": "photorealistic abandoned military base interior, corroded steel walls, harsh industrial lighting, film still, 35mm, highly detailed",
-    "anime": "anime film still, hand painted sci-fi corridor, cel shaded, studio ghibli lighting, vivid colors",
-    "claymation": "claymation stop motion diorama of a spaceship corridor, plasticine, soft studio lighting, macro photo",
-    "watercolor": "loose watercolor painting of a dark space station corridor, paper texture, ink outlines",
-    "alien": "biomechanical alien hive corridor, wet organic walls, bioluminescent, h.r. giger, cinematic",
+    "lego": "a first-person photograph inside a world built entirely from LEGO bricks, walls of stacked studded plastic bricks in bright red yellow blue and grey, glossy moulded plastic catching the light, LEGO minifigure monsters with printed faces standing in the room, sharp macro toy photography, even studio lighting, crisp focus",
+    "cyberpunk": "a rain-soaked cyberpunk corridor deep inside a megatower, hot pink and electric cyan signage burning through the haze, wet concrete reflecting the neon, chrome panelling and exposed cabling along the walls, holographic adverts flickering in the distance, anamorphic flare, cinematic night photography, richly detailed",
+    "bladerunner": "a Blade Runner 2049 film still of a vast brutalist corridor, dense volumetric fog lit from above, towering cyan and magenta signage fading into the murk, wet reflective floor, weathered concrete and cold chrome, anamorphic lens flare, cinematic teal and orange grade, moody and enormous",
+    "night_city": "a Night City interior from Cyberpunk 2077, saturated neon signage crowding the walls, holographic advertisements drifting in the air, chrome and carbon fibre panels bolted over grimy industrial plating, magenta and cyan rim light raking across every surface, high detail game screenshot",
+    "photoreal": "a photograph inside an abandoned military base, corroded steel walls streaked with rust, harsh fluorescent light from overhead strips, dust hanging in the beam, shot on 35mm film, highly detailed",
+    "anime": "a hand-painted anime film still of a sci-fi corridor, cel shaded with bold ink outlines, warm Studio Ghibli light falling through the doorway, vivid saturated colours, painted background art",
+    "claymation": "a stop-motion claymation diorama of a spaceship corridor, every surface hand-moulded plasticine with visible thumbprints, soft warm studio lighting, shallow macro photograph of a miniature set",
+    "watercolor": "a loose watercolour painting of a dark space station corridor, wet pigment blooming into rough paper, ink outlines drawn over the wash, muted blues and ochres, visible brush strokes",
+    "alien": "the inside of a biomechanical alien hive, wet organic walls of ribbed chitin and cabling, bioluminescent veins glowing green through the dark, H.R. Giger, cinematic and claustrophobic",
     "none": "",
 }
+# The renderer's surface classes painted in ADE20K's own colours, so a ControlNet trained on
+# ADE20K reads sky, wall, floor, ceiling and monster as the things they are.
+ADE_CLASS_COLORS = {0: (6, 230, 230), 1: (120, 120, 120), 2: (80, 50, 50), 3: (120, 120, 80),
+                    4: (150, 5, 61), 5: (255, 6, 82), 6: (204, 255, 4), 7: (224, 5, 255)}
 DEFAULT_STYLE = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
 # The renderer's camera: FOCAL and CENTER_Y for a 320x200 view, scaled with the output.
 VIEW_FOCAL, VIEW_CENTER_Y = 160.0, 100.0
@@ -159,8 +166,13 @@ class DiffusionRerender(_NeuralBase):
         self._setup_common(ctx, "diffusion")
         torch = self.torch
         from diffusers import AutoencoderTiny, ControlNetModel, StableDiffusionControlNetImg2ImgPipeline
-        controlnet = ControlNetModel.from_pretrained(HF_MODELS["controlnet"], torch_dtype=torch.float16)
-        self.pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(HF_MODELS["diffusion"], controlnet=controlnet, torch_dtype=torch.float16, safety_checker=None).to("cuda")
+        controlnets = [ControlNetModel.from_pretrained(HF_MODELS["controlnet"], torch_dtype=torch.float16),
+                       ControlNetModel.from_pretrained(HF_MODELS["controlnet_seg"], torch_dtype=torch.float16)]
+        self.pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(HF_MODELS["diffusion"], controlnet=controlnets, torch_dtype=torch.float16, safety_checker=None).to("cuda")
+        lut = numpy.zeros((256, 3), dtype=numpy.uint8)
+        for code, colour in ADE_CLASS_COLORS.items():
+            lut[code] = colour
+        self._class_lut = torch.from_numpy(lut).cuda()
         self.pipe.vae = AutoencoderTiny.from_pretrained(HF_MODELS["vae"], torch_dtype=torch.float16).to("cuda")
         self.pipe.set_progress_bar_config(disable=True)
         self.generator = torch.Generator("cuda").manual_seed(7)
@@ -177,19 +189,19 @@ class DiffusionRerender(_NeuralBase):
         self.previous = None
         self.previous_pose = None
         self.previous_style = None
-        # Tuned on a captured walk (streamlib_doom/capture.py). The carry is a resample, so colour
-        # and stud detail drain out of a pure feedback loop within seconds; a hard re-imagine from
-        # the game frame puts them back but reads as a strobe. The refresh re-imagines from the
-        # carried image instead, at a third of the cut's magnitude, and keeps the composition.
-        self.carry = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_CARRY", "0.82"))
-        self.unsharp = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_UNSHARP", "1.8"))
-        self.refresh_every = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFRESH_EVERY", "6"))
-        self.refresh_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFRESH_STRENGTH", "0.6"))
-        self.refine_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STEPS", "4"))
+        # The rendered frame is the camera, and it drives every frame: a loop that mostly re-denoises
+        # its own last output holds still but drains its colour and its studs within seconds. The carry
+        # is a minority partner now, enough to damp the shimmer, and the two ControlNets — the game's
+        # depth and its own per-pixel surface classes — hold the shape steady instead.
+        self.carry = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_CARRY", "0.35"))
+        self.unsharp = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_UNSHARP", "0.8"))
+        self.depth_scale = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_DEPTH_SCALE", "0.9"))
+        self.seg_scale = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_SEG_SCALE", "0.6"))
+        self.refine_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STEPS", "2"))
         self.lift = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_LIFT", "0.7"))
         self.keyframe_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_STEPS", "4"))
         self.keyframe_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_STRENGTH", "0.85"))
-        self.refine_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STRENGTH", "0.4"))
+        self.refine_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STRENGTH", "0.5"))
         self.strength = self.refine_strength
         self.steps = self.refine_steps
         assert int(self.steps * self.strength) >= 1, "refine steps x strength must round to at least one denoising step"
@@ -197,15 +209,15 @@ class DiffusionRerender(_NeuralBase):
             import torch._inductor.config as inductor_config
             inductor_config.triton.cudagraph_trees_generation_cloning = "user_visible"
             self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
-            self.pipe.controlnet = torch.compile(self.pipe.controlnet, mode="reduce-overhead", fullgraph=True)
+            self.pipe.controlnet.nets = torch.nn.ModuleList([torch.compile(net, mode="reduce-overhead", fullgraph=True) for net in self.pipe.controlnet.nets])
             self.pipe.vae.decoder = torch.compile(self.pipe.vae.decoder, mode="reduce-overhead", fullgraph=True)
             self.compiled = True
         # Warm the pipeline so the first live frame is not the slow one; compiling happens here too.
         started = time.monotonic()
         blank = torch.zeros((1, 3, NEURAL_H, NEURAL_W), dtype=torch.float16, device="cuda")
         for _ in range(3 if COMPILE else 1):
-            self._run(blank, blank, STYLES[DEFAULT_STYLE])
-        self._run(blank, blank, STYLES[DEFAULT_STYLE], steps=self.keyframe_steps, strength=self.keyframe_strength)
+            self._run(blank, [blank, blank], STYLES[DEFAULT_STYLE])
+        self._run(blank, [blank, blank], STYLES[DEFAULT_STYLE], steps=self.keyframe_steps, strength=self.keyframe_strength)
         log.info(f"MARKER:DIFFUSION_READY compiled={self.compiled} warmup_s={time.monotonic() - started:.0f}")
 
     def _prompt_embeds(self, prompt: str):
@@ -223,7 +235,7 @@ class DiffusionRerender(_NeuralBase):
             self.torch.compiler.cudagraph_mark_step_begin()
         with self.torch.inference_mode():
             out = self.pipe(prompt_embeds=embeds, image=init, control_image=control, num_inference_steps=steps or self.steps, strength=strength or self.strength,
-                            guidance_scale=0.0, controlnet_conditioning_scale=0.9, generator=self.generator, output_type="pt").images[0]
+                            guidance_scale=0.0, controlnet_conditioning_scale=[self.depth_scale, self.seg_scale], generator=self.generator, output_type="pt").images[0]
         return out.clone() if self.compiled else out
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -244,9 +256,11 @@ class DiffusionRerender(_NeuralBase):
         codes = tensor[:, :, 1].float()[None, None]
         near = 1.0 - codes.half() / 255.0  # depth code: 0 near .. 255 far/sky
         control = torch.nn.functional.interpolate(near, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False).repeat(1, 3, 1, 1)
+        segment = self._class_lut[tensor[:, :, 2].long()].permute(2, 0, 1)[None].half() / 255.0
+        segment = torch.nn.functional.interpolate(segment, size=(NEURAL_H, NEURAL_W), mode="nearest")
+        control = [control, segment]
         pose = view.get("pose")
         keyframe = self.previous is None or style != self.previous_style or pose is None or self.previous_pose is None
-        refresh = not keyframe and self.refresh_every and self.frames % self.refresh_every == 0
         if not keyframe:
             depth_z = torch.nn.functional.interpolate(codes, size=(NEURAL_H, NEURAL_W), mode="nearest")[0, 0]
             depth_z = 4.0 * torch.pow(2.0, depth_z / 255.0 * 8.0)
@@ -256,7 +270,7 @@ class DiffusionRerender(_NeuralBase):
             weight = valid * self.carry
             init = (carried.half() * weight.half() + game * (1.0 - weight.half())).clamp(0, 1)
             self.generator.manual_seed(7)
-            out = self._run(init, control, prompt, steps=4, strength=self.refresh_strength) if refresh else self._run(init, control, prompt)
+            out = self._run(init, control, prompt)
         else:
             self.generator.manual_seed(7)
             out = self._run(game, control, prompt, steps=self.keyframe_steps, strength=self.keyframe_strength)
@@ -265,7 +279,7 @@ class DiffusionRerender(_NeuralBase):
         image = (out.clamp(0, 1) * 255).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
         self.ms = (time.monotonic() - started) * 1000
         self.rate = 0.9 * self.rate + 0.1 * (1000.0 / max(self.ms, 1.0))
-        self._publish(ctx, image, "neural_to_downstream", {"style": style, "prompt": prompt[:80], "model": "sd-turbo + controlnet-depth", "tick": view.get("tick"),
+        self._publish(ctx, image, "neural_to_downstream", {"style": style, "prompt": prompt[:80], "model": "sd-turbo + controlnet depth/class", "tick": view.get("tick"),
                                                             "fps": round(min(self.rate, DIFFUSION_FPS), 1), "pose": pose, "keyframe": keyframe})
         self.frames += 1
         if self.frames in (1, 30, 300):

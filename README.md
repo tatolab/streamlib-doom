@@ -135,11 +135,16 @@ as you like. Two numbers matter — how much a frame changes from the last one r
 camera, and how much high-frequency detail survives — and they pull against each other. Carrying more
 of the previous frame and refining it gently halves the change, but the carry is a resample, so the
 studs bleed away over a few seconds and a perfectly steady picture is usually a washed-out one.
-Re-imagining hard from the game frame every few frames puts them back, but each cut is a strobe.
-What ships instead refreshes every sixth frame *from the carried image*, at a third of the cut's
-magnitude, so the composition holds and the colour comes back: measured over a 48-frame capture of
-the robot walking, 37% less frame-to-frame change than refining hard every frame, 27% more detail,
-and no cuts. A longer, more specific prompt measured
+Carrying most of the previous frame is a trap, and the change metric alone will walk you straight
+into it. A loop that starts each frame from 82% of its own last output holds beautifully still and
+scores best on paper, but the carry is a resample: the colour and the studs drain away within
+seconds, and the picture slowly stops being about the game at all. The rendered frame is the camera
+and it has to drive every frame. What ships starts each denoise from the current frame at 65%, keeps
+a minority carry to damp the shimmer, and replaces the lost stability with conditioning rather than
+recycling — two ControlNets, the renderer's depth and its own per-pixel surface classes, painted in
+ADE20K's colours so a segmentation ControlNet reads sky, wall, floor and monster as the things they
+are. That costs about 5 ms a frame and holds 12 Hz. The class map is free: the renderer already
+writes it into the blue channel for the sensors. A longer, more specific prompt measured
 slightly worse on both counts; a reference image would need a base model IP-Adapter supports, and
 sd-turbo's SD 2.1 is not one.
 

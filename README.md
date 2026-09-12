@@ -8,7 +8,7 @@ Not a port of the Doom engine. The real E1M1 from the shareware WAD — its geom
 
 <img src="https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.gif" alt="E1M1 rendered by StreamLib" width="640">
 
-[Watch the LEGO reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4) · [the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
+[Watch the LEGO reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4) · [the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
 
 </div>
 
@@ -56,9 +56,9 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 
 ## DOOM, rebuilt in LEGO while you play — a diffusion model, graded by its own renderer
 
-<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/neural-minifig.png" alt="the game beside its LEGO re-render, with neural depth, a detector and the level repainted" width="900"></a>
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/lego-minifig.png" alt="the game beside its LEGO re-render, with neural depth, a detector and the level repainted" width="900"></a>
 
-**[Watch the reel with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4)** · [the uncut take](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural-full.mp4) · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.gif)
+**[Watch the reel with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.mp4)** · [the uncut take](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego-full.mp4) · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-lego.gif)
 
 Four neural networks, each its own process on the same GPU, all reading the renderer's frame through the surface's DLPack door — one engine-side blit to a CUDA tensor, no CPU hop — while the game keeps rendering at 60 fps beside them:
 

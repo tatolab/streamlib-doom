@@ -74,7 +74,7 @@ def setup(rt: Runtime) -> None:
         rt.connect(whip_opus.output("encoded_audio"), publisher.input("tracks"))
 
     if RECORDING_PATH:
-        h264 = rt.add(H264Encoder, config={"fps": 35, "keyframe_interval_seconds": 1}, display_name="H264")
+        h264 = rt.add(H264Encoder, config={"fps": 60, "keyframe_interval_seconds": 1}, display_name="H264")
         opus = rt.add(OpusEncoder, config={"bitrate_bps": 128000}, display_name="Opus")
         recorder = rt.add(Mp4Sink, config={"path": RECORDING_PATH}, display_name="MP4")
         rt.connect(console.output("video"), h264.input("video"))

@@ -234,9 +234,39 @@ class _GpuStage:
         self._colormap_texture.unlock()
 
 
-@processor
+RENDER_FPS = int(os.environ.get("STREAMLIB_DOOM_RENDER_FPS", "60"))
+RENDER_FRAME_NS = 1_000_000_000 // RENDER_FPS
+
+
+def _interpolated_world(previous: dict, current: dict, alpha: float) -> dict:
+    """The world between two tics, the way a source port renders above 35 fps: the camera and
+    every thing slide from the last tic's pose toward this one's. A jump larger than a stride
+    (a teleport, a restart) is shown as it is."""
+    if previous is None or alpha >= 1.0 or previous["tick"] >= current["tick"]:
+        return current
+    if math.hypot(current["x"] - previous["x"], current["y"] - previous["y"]) > 128.0:
+        return current
+    world = dict(current)
+    for key in ("x", "y", "z"):
+        world[key] = previous[key] + (current[key] - previous[key]) * alpha
+    turn = (current["angle"] - previous["angle"] + math.pi) % (2 * math.pi) - math.pi
+    world["angle"] = previous["angle"] + turn * alpha
+    before, after = previous["things"], current["things"]
+    if len(before) == len(after):
+        things = []
+        for a, b in zip(before, after):
+            if a[3] == b[3] and abs(a[0] - b[0]) < 128.0 and abs(a[1] - b[1]) < 128.0:
+                things.append([a[0] + (b[0] - a[0]) * alpha, a[1] + (b[1] - a[1]) * alpha, a[2] + (b[2] - a[2]) * alpha, *b[3:]])
+            else:
+                things.append(b)
+        world["things"] = things
+    return world
+
+
+@processor(execution="continuous", interval_ms=1)
 class E1M1GameRenderer(_GpuStage):
-    """The demo's column renderer, reading moving sector heights from the game."""
+    """The demo's column renderer, reading moving sector heights from the game and rendering
+    at RENDER_FPS with the camera interpolated between the game's 35 tics."""
 
     @input(delivery_profile="newest")
     def world_from_upstream(self) -> None: ...
@@ -247,6 +277,10 @@ class E1M1GameRenderer(_GpuStage):
     def __init__(self) -> None:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=3)
         self.frames = 0
+        self.previous: dict | None = None
+        self.current: dict | None = None
+        self.current_arrived_ns = 0
+        self.next_frame_ns = 0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
@@ -289,9 +323,15 @@ class E1M1GameRenderer(_GpuStage):
         return rows, min(len(visible), 256)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        world = ctx.inputs.read("world_from_upstream")
-        if world is None:
+        now = clock.monotonic_now_ns()
+        latest = ctx.inputs.read("world_from_upstream")
+        if latest is not None and (self.current is None or latest["tick"] != self.current["tick"]):
+            self.previous, self.current, self.current_arrived_ns = self.current, latest, now
+        if self.current is None or now < self.next_frame_ns:
             return
+        self.next_frame_ns = max(self.next_frame_ns + RENDER_FRAME_NS, now - 2 * RENDER_FRAME_NS)
+        alpha = min(1.0, (now - self.current_arrived_ns) / TIC_NS)
+        world = _interpolated_world(self.previous, self.current, alpha)
         rows, thing_count = self._dynamic_rows(world)
         _write_floats(self._dynamic_texture, rows)
         slot = self._ring.next_texture_for_this_frame(ctx.gpu_limited_access, VIEW_W, VIEW_H)
@@ -307,8 +347,8 @@ class E1M1GameRenderer(_GpuStage):
                                                            extralight=world["extralight"], tick=world["tick"],
                                                            stage_ns={**(world.get("stage_ns") or {}), "render": clock.monotonic_now_ns()}, pid=os.getpid()))
         self.frames += 1
-        if self.frames in (1, 35, 35 * 60):
-            _log("RENDERER_FRAME", frames=self.frames, things=thing_count)
+        if self.frames in (1, 60, 60 * 60):
+            _log("RENDERER_FRAME", frames=self.frames, things=thing_count, fps=RENDER_FPS)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +586,11 @@ class BrowserFrameSender:
         events = [name for tick, name in latest.get("event_log") or [] if tick > self.last_event_tick]
         if latest.get("event_log"):
             self.last_event_tick = max(self.last_event_tick, max(tick for tick, _ in latest["event_log"]))
+        # A phone gets 30 frames a second whatever the renderer runs at; sounds are never skipped.
+        now = clock.monotonic_now_ns()
+        if not events and now < getattr(self, "next_send_ns", 0):
+            return
+        self.next_send_ns = max(getattr(self, "next_send_ns", 0) + 33_333_333, now - 66_666_666)
         self.frames += 1
         if self.broadcaster.count() == 0 and self.frames % 7 != 0:
             return

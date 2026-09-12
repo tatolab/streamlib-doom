@@ -22,6 +22,18 @@ VIEW_W, VIEW_H = 320, 200
 PANE_W, PANE_H = 360, 225
 RING_USAGE = ["texture_binding", "storage_binding"]
 LIDAR_RAYS = 360
+# Sensors pace themselves below the renderer's rate: the panes refresh a few times a second,
+# and every frame a sensor skips is a GPU request the node's other processes never wait on.
+SENSOR_FRAME_NS = 1_000_000_000 // int(os.environ.get("STREAMLIB_DOOM_SENSOR_FPS", "20"))
+LIDAR_FRAME_NS = 1_000_000_000 // int(os.environ.get("STREAMLIB_DOOM_LIDAR_FPS", "15"))
+
+
+def _due(self, period_ns: int) -> bool:
+    now = clock.monotonic_now_ns()
+    if now < getattr(self, "_next_due_ns", 0):
+        return False
+    self._next_due_ns = max(getattr(self, "_next_due_ns", 0) + period_ns, now - period_ns)
+    return True
 LIDAR_RANGE = 1600.0
 MAP_CELL = 20.0
 FOCAL = 160.0
@@ -96,7 +108,7 @@ class _ViewSensorMixin:
 
     def _process_sensor(self, ctx: RuntimeContextLimitedAccess, port: str) -> None:
         view = ctx.inputs.read("view_from_upstream")
-        if view is None:
+        if view is None or not _due(self, SENSOR_FRAME_NS):
             return
         gpu = ctx.gpu_limited_access
         slot = self._ring.next_texture_for_this_frame(gpu, VIEW_W, VIEW_H)
@@ -161,7 +173,7 @@ class PerceptionNode:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         view = ctx.inputs.read("view_from_upstream")
-        if view is None:
+        if view is None or not _due(self, SENSOR_FRAME_NS):
             return
         started = clock.monotonic_now_ns()
         with ctx.gpu_limited_access.resolve_surface(view["surface_id"]) as surface:
@@ -268,7 +280,7 @@ class LidarScanner:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         world = ctx.inputs.read("world_from_upstream")
-        if world is None or world["tick"] == self.last_tick:
+        if world is None or world["tick"] == self.last_tick or not _due(self, LIDAR_FRAME_NS):
             return
         self.last_tick = world["tick"]
         floors, ceilings = numpy.asarray(world["floors"], dtype=numpy.float64), numpy.asarray(world["ceilings"], dtype=numpy.float64)

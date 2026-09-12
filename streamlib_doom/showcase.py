@@ -686,7 +686,7 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 BADGES = ("AUTONOMY  ·  the planner drives, from its own camera", "TELEOP  ·  a phone is driving over WebSocket", "IDLE  ·  waiting for a hand or a plan")
 
 
-@processor(execution="continuous", interval_ms=5)
+@processor(execution="continuous", interval_ms=1)
 class ConsoleCompositor:
     """1920x1080: the live graph, the operator's view with its control badge, five sensor panes,
     and the caption bar — sampled by one kernel from textures other processes published."""
@@ -725,7 +725,8 @@ class ConsoleCompositor:
                    "telemetry": "telemetry_from_upstream", "graph": "graph_panel_from_upstream", "caption": "caption_from_upstream"}
     # Resolving a surface from another process costs a few milliseconds; a pane's handle is kept
     # until its surface id changes, and the sensor panes take a new one every few frames.
-    REFRESH_EVERY = {"depth": 2, "segmentation": 2, "lidar": 3, "map": 3, "telemetry": 1, "graph": 1, "caption": 1}
+    REFRESH_EVERY = {"depth": 3, "segmentation": 3, "lidar": 4, "map": 4, "telemetry": 1, "graph": 1, "caption": 1}
+    FPS = int(os.environ.get("STREAMLIB_DOOM_CONSOLE_FPS", "60"))
 
     def __init__(self) -> None:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=4)
@@ -812,17 +813,19 @@ class ConsoleCompositor:
         if frame is not None and (self.frame is None or frame["surface_id"] != self.frame["surface_id"]):
             if self.frame_handle is not None:
                 self.frame_handle.close()
+            t_frame = time.monotonic()
             try:
                 self.frame_handle = gpu.resolve_surface(frame["surface_id"])
                 self.frame = frame
             except Exception:
                 self.frame_handle = None
+            self.frame_resolve_ms = getattr(self, "frame_resolve_ms", 0.0) + (time.monotonic() - t_frame) * 1000
         if self.frame_handle is None:
             return
         now_ns = clock.monotonic_now_ns()
         if now_ns < self.next_frame_ns:
             return
-        self.next_frame_ns = max(self.next_frame_ns + 1_000_000_000 // 35, now_ns - 2 * 1_000_000_000 // 35)
+        self.next_frame_ns = max(self.next_frame_ns + 1_000_000_000 // self.FPS, now_ns - 2 * 1_000_000_000 // self.FPS)
         frame = self.frame
         t_start = time.monotonic()
         slot = self._ring.next_texture_for_this_frame(gpu, OUT_W, OUT_H)
@@ -863,10 +866,13 @@ class ConsoleCompositor:
         self.timing += (t_resolved - t_start, t_dispatched - t_resolved, t_done - t_dispatched, t_done - t_start)
         if self.frames % 200 == 199:
             ms = self.timing / 200 * 1000
-            log.info(f"MARKER:CONSOLE_TIMING resolve={ms[0]:.1f} dispatch={ms[1]:.1f} settle={ms[2]:.1f} total={ms[3]:.1f} panes={len(handles)}")
+            window = time.monotonic() - getattr(self, "timing_started", time.monotonic() - 1)
+            log.info(f"MARKER:CONSOLE_TIMING frame_resolve={self.frame_resolve_ms / 200:.1f} panes_resolve={ms[0]:.1f} dispatch={ms[1]:.1f} settle={ms[2]:.1f} total={ms[3]:.1f} panes={len(handles)} fps={200 / window:.1f}")
             self.timing[:] = 0
+            self.frame_resolve_ms = 0.0
+            self.timing_started = time.monotonic()
         now_ns = clock.monotonic_now_ns()
-        ctx.outputs.write("video", {"surface_id": slot.surface_id, "width": OUT_W, "height": OUT_H, "timestamp_ns": now_ns, "fps": 35, "texture_layout": 5})
+        ctx.outputs.write("video", {"surface_id": slot.surface_id, "width": OUT_W, "height": OUT_H, "timestamp_ns": now_ns, "fps": self.FPS, "texture_layout": 5})
         self.frames += 1
         self.fps_window.append(time.monotonic())
         if time.monotonic() - self.last_witness > 0.2:

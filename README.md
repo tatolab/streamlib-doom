@@ -77,7 +77,7 @@ scripts/demo-reel.py                                      # adds the sensors liv
 
 The reel is driven over the same MCP tools an agent uses — `add_processor`, `connect`, `disconnect`, `remove_processor` on the live node — and the beat that says *Claude* runs `claude -p` for real: it reads the snapshot and the state, adds `DirectorCommand` nodes named `Claude: …` (they draw in gold), and its two‑sentence reply lands on the caption bar. Mid‑reel the HUD → console link is cut, a thermal effect node is spliced in and the picture turns thermal while the sensors stay untouched, then the node is removed and the link reconnected. Frames never stop; the recorder never notices.
 
-The 1920×1080 picture is composited by one kernel from textures the other processes published and recorded through the engine's own H.264 and Opus encoders into its MP4 writer — the runtime records this picture of itself.
+The 1920×1080 picture is composited at 60 fps by one kernel from textures the other processes published and recorded through the engine's own H.264 and Opus encoders into its MP4 writer — the runtime records this picture of itself. The game still simulates at Doom's 35 tics a second; the renderer runs at 60 and interpolates the camera and every sprite between tics, the way a modern source port does, so the picture is sixty distinct frames a second. The sensors pace themselves at 20 Hz and the lidar at 15, because every frame a sensor skips is a GPU request nothing else in the node waits on.
 
 ## How it works
 

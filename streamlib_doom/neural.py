@@ -36,14 +36,50 @@ HF_MODELS = {
     "detector": "IDEA-Research/grounding-dino-base",
 }
 STYLES = {
+    "lego": "a first-person view of a video game level built entirely out of lego bricks, bright primary colors, glossy plastic studs, lego minifigure monsters, toy photography, studio lighting, sharp focus",
     "photoreal": "photorealistic abandoned military base interior, corroded steel walls, harsh industrial lighting, film still, 35mm, highly detailed",
     "anime": "anime film still, hand painted sci-fi corridor, cel shaded, studio ghibli lighting, vivid colors",
     "claymation": "claymation stop motion diorama of a spaceship corridor, plasticine, soft studio lighting, macro photo",
     "watercolor": "loose watercolor painting of a dark space station corridor, paper texture, ink outlines",
     "alien": "biomechanical alien hive corridor, wet organic walls, bioluminescent, h.r. giger, cinematic",
-    "lego": "a scene built entirely out of lego bricks, plastic, studio lighting, macro photo",
     "none": "",
 }
+DEFAULT_STYLE = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
+# The renderer's camera: FOCAL and CENTER_Y for a 320x200 view, scaled with the output.
+VIEW_FOCAL, VIEW_CENTER_Y = 160.0, 100.0
+
+
+def reproject(previous, previous_pose, current_pose, depth_z, torch):
+    """`previous` (1,3,H,W) seen from `previous_pose`, re-drawn from `current_pose` using the
+    current frame's per-pixel z depth (H,W) — the same reprojection a game's TAA does, with the
+    depth the renderer already wrote. Returns the resampled image and a validity mask (1,1,H,W)."""
+    _, _, H, W = previous.shape
+    scale = W / 320.0
+    focal, center_y = VIEW_FOCAL * scale, VIEW_CENTER_Y * scale
+    cx, cy, cz, ca = current_pose
+    px, py, pz, pa = previous_pose
+    device = previous.device
+    cols = torch.arange(W, device=device, dtype=torch.float32)[None, :].expand(H, W) + 0.5
+    rows = torch.arange(H, device=device, dtype=torch.float32)[:, None].expand(H, W) + 0.5
+    z = depth_z
+    lateral = z * (cols - W / 2.0) / focal
+    height = cz + (center_y - rows) * z / focal
+    fx, fy = math.cos(ca), math.sin(ca)
+    rx, ry = fy, -fx
+    wx = cx + fx * z + rx * lateral
+    wy = cy + fy * z + ry * lateral
+    pfx, pfy = math.cos(pa), math.sin(pa)
+    prx, pry = pfy, -pfx
+    relx, rely = wx - px, wy - py
+    zp = relx * pfx + rely * pfy
+    xp = relx * prx + rely * pry
+    safe = zp.clamp(min=1.0)
+    cp = W / 2.0 + xp / safe * focal
+    rp = center_y - (height - pz) * focal / safe
+    grid = torch.stack([cp / W * 2.0 - 1.0, rp / H * 2.0 - 1.0], dim=-1)[None]
+    sampled = torch.nn.functional.grid_sample(previous.float(), grid, mode="bilinear", padding_mode="border", align_corners=False)
+    valid = ((zp > 4.0) & (cp >= 0) & (cp < W) & (rp >= 0) & (rp < H)).float()[None, None]
+    return sampled, valid
 
 
 def _due(self, period_ns: int) -> bool:
@@ -131,9 +167,20 @@ class DiffusionRerender(_NeuralBase):
         self.embeds: dict = {}
         self.compiled = False
         self.rate = 0.0
-        self.style = "photoreal"
-        self.strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_STRENGTH", "0.68"))
-        self.steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_STEPS", "2"))
+        self.style = DEFAULT_STYLE
+        # Temporal coherence: every frame after the first starts from its own previous output,
+        # reprojected through the game's depth into the new camera pose, blended with the new game
+        # frame — so the bricks stay where they were instead of being reinvented each frame.
+        self.previous = None
+        self.previous_pose = None
+        self.previous_style = None
+        self.carry = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_CARRY", "0.55"))
+        self.lift = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_LIFT", "0.7"))
+        self.keyframe_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_STEPS", "4"))
+        self.keyframe_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_STRENGTH", "0.85"))
+        self.refine_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STRENGTH", "0.6"))
+        self.strength = self.refine_strength
+        self.steps = 2
         if COMPILE:
             import torch._inductor.config as inductor_config
             inductor_config.triton.cudagraph_trees_generation_cloning = "user_visible"
@@ -145,7 +192,8 @@ class DiffusionRerender(_NeuralBase):
         started = time.monotonic()
         blank = torch.zeros((1, 3, NEURAL_H, NEURAL_W), dtype=torch.float16, device="cuda")
         for _ in range(3 if COMPILE else 1):
-            self._run(blank, blank, STYLES["photoreal"])
+            self._run(blank, blank, STYLES[DEFAULT_STYLE])
+        self._run(blank, blank, STYLES[DEFAULT_STYLE], steps=self.keyframe_steps, strength=self.keyframe_strength)
         log.info(f"MARKER:DIFFUSION_READY compiled={self.compiled} warmup_s={time.monotonic() - started:.0f}")
 
     def _prompt_embeds(self, prompt: str):
@@ -157,12 +205,12 @@ class DiffusionRerender(_NeuralBase):
                 self.embeds.pop(next(iter(self.embeds)))
         return self.embeds[prompt]
 
-    def _run(self, init, control, prompt: str):
+    def _run(self, init, control, prompt: str, steps: int | None = None, strength: float | None = None):
         embeds = self._prompt_embeds(prompt)
         if self.compiled:
             self.torch.compiler.cudagraph_mark_step_begin()
         with self.torch.inference_mode():
-            out = self.pipe(prompt_embeds=embeds, image=init, control_image=control, num_inference_steps=self.steps, strength=self.strength,
+            out = self.pipe(prompt_embeds=embeds, image=init, control_image=control, num_inference_steps=steps or self.steps, strength=strength or self.strength,
                             guidance_scale=0.0, controlnet_conditioning_scale=0.9, generator=self.generator, output_type="pt").images[0]
         return out.clone() if self.compiled else out
 
@@ -171,24 +219,41 @@ class DiffusionRerender(_NeuralBase):
         if view is None or not _due(self, int(1e9 / DIFFUSION_FPS)):
             return
         torch = self.torch
-        style = str(((view.get("state") or {}).get("style")) or "photoreal")
+        style = str(((view.get("state") or {}).get("style")) or DEFAULT_STYLE)
         prompt = STYLES.get(style, style)
         if not prompt:
             return
         started = time.monotonic()
         with ctx.gpu_limited_access.resolve_surface(view["surface_id"]) as handle:
             tensor, self.path = _view_tensor(handle, torch)
-        rgb = self._rgb(tensor, view.get("palette", 0)).permute(2, 0, 1)[None].half() / 255.0  # (1,3,H,W)
-        init = torch.nn.functional.interpolate(rgb, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False)
-        near = 1.0 - tensor[:, :, 1].half()[None, None] / 255.0  # depth code: 0 near .. 255 far/sky
+        rgb = self._rgb(tensor, 0).permute(2, 0, 1)[None].half() / 255.0  # (1,3,H,W), base palette: the flash is a HUD effect
+        rgb = rgb.float().pow(self.lift).half()  # a toy photograph is lit; Doom's corridors are not
+        game = torch.nn.functional.interpolate(rgb, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False)
+        codes = tensor[:, :, 1].float()[None, None]
+        near = 1.0 - codes.half() / 255.0  # depth code: 0 near .. 255 far/sky
         control = torch.nn.functional.interpolate(near, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False).repeat(1, 3, 1, 1)
-        self.generator.manual_seed(7)
-        out = self._run(init, control, prompt)
+        pose = view.get("pose")
+        keyframe = self.previous is None or style != self.previous_style or pose is None or self.previous_pose is None
+        if not keyframe:
+            depth_z = torch.nn.functional.interpolate(codes, size=(NEURAL_H, NEURAL_W), mode="nearest")[0, 0]
+            depth_z = 4.0 * torch.pow(2.0, depth_z / 255.0 * 8.0)
+            carried, valid = reproject(self.previous, self.previous_pose, pose, depth_z, torch)
+            blurred = torch.nn.functional.avg_pool2d(carried, 3, stride=1, padding=1)
+            carried = (carried + 0.6 * (carried - blurred)).clamp(0, 1)  # resampling softens; give the edge back
+            weight = valid * self.carry
+            init = (carried.half() * weight.half() + game * (1.0 - weight.half())).clamp(0, 1)
+            self.generator.manual_seed(7)
+            out = self._run(init, control, prompt)
+        else:
+            self.generator.manual_seed(7)
+            out = self._run(game, control, prompt, steps=self.keyframe_steps, strength=self.keyframe_strength)
+        self.previous = out.detach()[None] if out.ndim == 3 else out.detach()
+        self.previous_pose, self.previous_style = pose, style
         image = (out.clamp(0, 1) * 255).to(torch.uint8).permute(1, 2, 0).cpu().numpy()
         self.ms = (time.monotonic() - started) * 1000
         self.rate = 0.9 * self.rate + 0.1 * (1000.0 / max(self.ms, 1.0))
         self._publish(ctx, image, "neural_to_downstream", {"style": style, "prompt": prompt[:80], "model": "sd-turbo + controlnet-depth", "tick": view.get("tick"),
-                                                            "fps": round(min(self.rate, DIFFUSION_FPS), 1)})
+                                                            "fps": round(min(self.rate, DIFFUSION_FPS), 1), "pose": pose, "keyframe": keyframe})
         self.frames += 1
         if self.frames in (1, 30, 300):
             log.info(f"MARKER:DIFFUSION_FRAME frames={self.frames} ms={self.ms:.0f} path={self.path} style={style}")

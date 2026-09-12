@@ -302,8 +302,10 @@ class GraphPanel(_PanelPublisher):
             if a and b:
                 links.append((a, b))
         depth = _layer(nodes, links)
-        max_columns = max(1, (GRAPH_W - 24) // 142)
-        depth = {k: min(v, max_columns - 1) for k, v in depth.items()}
+        max_columns = max(1, min(5, (GRAPH_W - 24) // 108))
+        deepest = max(depth.values(), default=0)
+        if deepest >= max_columns:
+            depth = {k: round(v * (max_columns - 1) / deepest) for k, v in depth.items()}
         columns = max(depth.values(), default=0) + 1
         node_w = min(NODE_W, (GRAPH_W - 24 - 10 * (columns - 1)) // columns)
         pitch_x = (GRAPH_W - 24 - node_w) // max(columns - 1, 1) if columns > 1 else 0
@@ -663,9 +665,30 @@ layout(set = 0, binding = 8) uniform sampler2D caption;        // 1888x252
 layout(set = 0, binding = 9) uniform sampler2D chrome;         // 1920x1080 overlay: title, pane labels
 layout(set = 0, binding = 10) uniform sampler2D badges;        // 640x84: three 28-row badges
 layout(set = 0, binding = 11, rgba8) uniform writeonly image2D output_image;
-layout(push_constant) uniform PC { float palette; float badge; float unused0; float unused1; } pc;
+layout(push_constant) uniform PC { float palette; float badge; float reproject; float unused1;
+                                   float cur_x; float cur_y; float cur_z; float cur_angle;
+                                   float neu_x; float neu_y; float neu_z; float neu_angle; } pc;
 
 const int SENSOR_Y = 584; const int LABEL_H = 26; const int STRIP_H = 188; const int STRIP_W = 300;
+const float FOCAL = 160.0; const float CENTER_Y = 100.0;
+
+// The neural frame was drawn from pc.neu_* ; this pixel's depth says where it is now, so sample
+// the neural frame where that point fell in its camera — the pane moves at the console's rate
+// while the model refreshes at its own.
+ivec2 reprojected(vec2 game_px, float z) {
+    float lateral = z * (game_px.x - 160.0) / FOCAL;
+    float height = pc.cur_z + (CENTER_Y - game_px.y) * z / FOCAL;
+    vec2 f = vec2(cos(pc.cur_angle), sin(pc.cur_angle)); vec2 r = vec2(f.y, -f.x);
+    vec2 world = vec2(pc.cur_x, pc.cur_y) + f * z + r * lateral;
+    vec2 pf = vec2(cos(pc.neu_angle), sin(pc.neu_angle)); vec2 pr = vec2(pf.y, -pf.x);
+    vec2 rel = world - vec2(pc.neu_x, pc.neu_y);
+    float zp = max(dot(rel, pf), 1.0);
+    float xp = dot(rel, pr);
+    float cp = 160.0 + xp / zp * FOCAL;
+    float rp = CENTER_Y - (height - pc.neu_z) * FOCAL / zp;
+    if (cp < 0.0 || cp >= 320.0 || rp < 0.0 || rp >= 200.0 || dot(rel, pf) < 4.0) return ivec2(-1, -1);  // fell off the neural frame
+    return ivec2(int(cp * 1.6), int(rp * 1.6));
+}
 
 vec4 pane(sampler2D tex, int x, int y, int src_x0, int src_w, int src_h) {
     ivec2 src = ivec2(src_x0 + (x * src_w) / STRIP_W, (y * src_h) / STRIP_H);
@@ -683,7 +706,14 @@ void main() {
         int index = int(texelFetch(game_frame, src, 0).r * 255.0 + 0.5);
         color = vec4(texelFetch(palettes, ivec2(index, int(pc.palette)), 0).rgb, 1.0);
     } else if (at.x >= 1264 && at.x < 1264 + 640 && at.y >= 64 && at.y < 64 + 480) {
+        vec2 game_px = vec2((float(at.x - 1264) + 0.5) * 0.5, (float(at.y - 64) + 0.5) * (200.0 / 480.0));
         ivec2 src = ivec2(((at.x - 1264) * 512) / 640, ((at.y - 64) * 320) / 480);
+        if (pc.reproject > 0.5) {
+            float code = texelFetch(game_frame, ivec2(game_px), 0).g;
+            float z = 4.0 * exp2(code * 8.0);
+            ivec2 moved = reprojected(game_px, z);
+            if (moved.x >= 0) src = moved;  // otherwise the unmoved sample: a slight misalignment beats a streak
+        }
         color = vec4(texelFetch(neural_pane, src, 0).rgb, 1.0);
     } else if (at.x >= 608 && at.x < 608 + 640 && at.y >= 544 && at.y < 572) {
         color = vec4(texelFetch(badges, ivec2(at.x - 608, at.y - 544 + int(pc.badge) * 28), 0).rgb, 1.0);
@@ -715,6 +745,8 @@ layout(set = 0, binding = 1, rgba8) uniform writeonly image2D scratch_image;
 void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_image, at, texelFetch(settled_source, at, 0)); }
 """
 
+REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
+PANES_PORT = int(os.environ.get("STREAMLIB_DOOM_PANES_PORT", "8669"))
 BADGES = ("AUTONOMY  ·  the planner drives, from its own camera", "TELEOP  ·  a phone is driving over WebSocket", "IDLE  ·  waiting for a hand or a plan")
 BADGE_W = 640
 
@@ -764,6 +796,7 @@ class ConsoleCompositor:
     def __init__(self) -> None:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=4)
         self.latest: dict = {}
+        self.arrived: dict = {}  # pane -> monotonic time its newest bag arrived
         self.handles: dict = {}  # pane -> (surface_id, handle, frame index it was resolved at)
         self.perception: dict | None = None
         self.frames = 0
@@ -833,20 +866,52 @@ class ConsoleCompositor:
         self._badges.lock(read_only=False)
         self._badges.as_numpy()[:, :, :] = badges
         self._badges.unlock()
-        self._kernel = gpu.create_compute_kernel(source=CONSOLE_GLSL, push_constant_size=16, bindings={
+        self._kernel = gpu.create_compute_kernel(source=CONSOLE_GLSL, push_constant_size=48, bindings={
             "game_frame": "sampled_texture", "palettes": "sampled_texture", "neural_pane": "sampled_texture", "depth_trio": "sampled_texture",
             "detector_pane": "sampled_texture", "map_pane": "sampled_texture", "telemetry": "sampled_texture", "graph_panel": "sampled_texture",
             "caption": "sampled_texture", "chrome": "sampled_texture", "badges": "sampled_texture", "output_image": "storage_image"})
         self._scratch = gpu.acquire_texture(8, 8, "rgba8_unorm", RING_USAGE)
         self._settle = gpu.create_compute_kernel(source=SETTLE_GLSL, bindings={"settled_source": "sampled_texture", "scratch_image": "storage_image"})
+        self._serve_panes()
         log.info(f"MARKER:CONSOLE_SETUP pid={os.getpid()}")
+
+    def _serve_panes(self) -> None:
+        """GET /panes: seconds since each pane last arrived — the only honest test that a link
+        wired into this console after its setup is really delivering."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        console = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                now = time.monotonic()
+                ages = {name: round(now - console.arrived.get(name, -1e9), 2) for name in console.PANE_INPUTS}
+                ages["frame"] = round(now - console.arrived.get("frame", -1e9), 2)
+                body = json.dumps({"ages_s": ages, "frames": console.frames}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        try:
+            server = ThreadingHTTPServer(("0.0.0.0", PANES_PORT), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        except OSError as failure:
+            log.info(f"MARKER:CONSOLE_PANES_PORT_BUSY {failure!r}")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         for name, port in self.PANE_INPUTS.items():
             bag = ctx.inputs.read(port)
             if bag is not None:
                 self.latest[name] = bag
+                self.arrived[name] = time.monotonic()
         frame = ctx.inputs.read("frame_from_upstream")
+        if frame is not None:
+            self.arrived["frame"] = time.monotonic()
         gpu = ctx.gpu_limited_access
         if frame is not None and (self.frame is None or frame["surface_id"] != self.frame["surface_id"]):
             if self.frame_handle is not None:
@@ -888,13 +953,17 @@ class ConsoleCompositor:
                 game_frame = self.frame_handle
                 source = ((frame.get("state") or {}).get("control_source")) or "idle"
                 badge = 0.0 if source == "autonomy" else (1.0 if source == "teleop" else 2.0)
+                neural_bag = self.latest.get("neural") or {}
+                cur_pose = [float(x) for x in (frame.get("pose") or [0, 0, 0, 0])]
+                neu_pose = [float(x) for x in (neural_bag.get("pose") or [0, 0, 0, 0])]
+                reproject = 1.0 if (frame.get("pose") and neural_bag.get("pose") and REPROJECT) else 0.0
                 self._kernel.dispatch(bindings={
                     "game_frame": game_frame, "palettes": self._palettes,
                     "neural_pane": handles.get("neural") or self._blank["neural"], "depth_trio": handles.get("depth_trio") or self._blank["trio"],
                     "detector_pane": handles.get("detector") or self._blank["view"], "map_pane": handles.get("map") or self._blank["pane"],
                     "telemetry": handles.get("telemetry") or self._blank["telemetry"], "graph_panel": handles.get("graph") or self._blank["graph"],
                     "caption": handles.get("caption") or self._blank["caption"], "chrome": self._chrome, "badges": self._badges, "output_image": slot,
-                }, group_count=(OUT_W // 8, OUT_H // 8, 1), push_constants=struct.pack("<4f", float(frame.get("palette", 0)), badge, 0.0, 0.0))
+                }, group_count=(OUT_W // 8, OUT_H // 8, 1), push_constants=struct.pack("<12f", float(frame.get("palette", 0)), badge, reproject, 0.0, *cur_pose, *neu_pose))
         finally:
             pass
         t_dispatched = time.monotonic()

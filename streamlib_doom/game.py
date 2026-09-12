@@ -8,6 +8,7 @@ are Doom's (speeds in map units per tic, tics per state, damage dice).
 """
 from __future__ import annotations
 
+import os
 import math
 import random
 
@@ -105,7 +106,7 @@ class Game:
         self.tick_count = 0
         self.mission = "patrol"
         self.control_source = "autonomy"
-        self.style = "photoreal"
+        self.style = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
         self.repaint = ""
         self.repaint_count = 0
         # Door lines by midpoint and the sector they open, for a planner that has to press USE.

@@ -282,7 +282,8 @@ void main() {
         }
         index = palette_index;
     }
-    imageStore(frame_image, at, vec4(float(index) / 255.0, 0.0, 0.0, 1.0));
+    vec4 under = texelFetch(view_from_renderer, at, 0);
+    imageStore(frame_image, at, vec4(float(index) / 255.0, under.g, under.b, 1.0));  // depth and class ride along for consumers that reproject
 }
 """
 
@@ -369,6 +370,7 @@ void main() {
             index = shade(darken, index);
         }
     }
-    imageStore(frame_image, at, vec4(float(index) / 255.0, 0.0, 0.0, 1.0));
+    vec4 under = texelFetch(view_from_renderer, at, 0);
+    imageStore(frame_image, at, vec4(float(index) / 255.0, under.g, under.b, 1.0));  // depth and class ride along for consumers that reproject
 }
 """

@@ -23,7 +23,7 @@ def game():
 
 def drive(game, mission: str, seconds: float):
     game.mission = mission
-    memory = PlannerMemory(NavGrid(game))
+    memory = PlannerMemory(NavGrid(game), synchronous=True)
     positions, fired = [], []
     for _ in range(int(seconds * 35)):
         world = game.snapshot()
@@ -60,7 +60,7 @@ def test_a_threat_in_view_is_turned_toward_and_shot(game):
         game.tick({})
     for m in game.monsters[-1:]:
         m["state"] = "chase"
-    memory = PlannerMemory(NavGrid(game))
+    memory = PlannerMemory(NavGrid(game), synchronous=True)
     fired = 0
     for _ in range(35 * 6):
         controls = plan(game.snapshot(), ground_truth_detections(game), memory)

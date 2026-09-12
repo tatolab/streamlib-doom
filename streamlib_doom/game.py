@@ -105,6 +105,9 @@ class Game:
         self.tick_count = 0
         self.mission = "patrol"
         self.control_source = "autonomy"
+        self.style = "photoreal"
+        self.repaint = ""
+        self.repaint_count = 0
         # Door lines by midpoint and the sector they open, for a planner that has to press USE.
         self.door_lines = [(int(i), float(self.l1[i][0] + self.ld[i][0] / 2), float(self.l1[i][1] + self.ld[i][1] / 2), int(self.left_sector[i]))
                            for i in range(len(self.level.linedefs)) if int(self.special[i]) in DOOR_SPECIALS and self.two_sided[i]]
@@ -881,6 +884,13 @@ class Game:
         elif verb == "mission":
             self.mission = str(command.get("goal", "patrol"))
             did = f"set the mission to {self.mission}"
+        elif verb == "style":
+            self.style = str(command.get("style", "photoreal"))
+            did = f"set the neural style to {self.style}"
+        elif verb == "repaint":
+            self.repaint_count += 1
+            self.repaint = f"{command.get('style', 'marble')}#{self.repaint_count}"
+            did = f"asked for the level to be repainted in {command.get('style', 'marble')}"
         elif verb == "effect":
             from .effects import MODES
             name = str(command.get("effect", "none"))
@@ -1075,6 +1085,6 @@ class Game:
                 "monsters_awake": sum(1 for m in self.monsters if m["alive"] and m["state"] != "idle"),
                 "lights": self.light_factor, "god": bool(p.get("god")), "autopilot": self.autopilot, "effect": self.effect,
                 "director_log": [text for _t, text in self.director_log],
-                "mission": self.mission, "control_source": self.control_source,
+                "mission": self.mission, "control_source": self.control_source, "style": self.style, "repaint": self.repaint,
             },
         }

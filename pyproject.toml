@@ -8,6 +8,7 @@ license = { file = "LICENSE" }
 dependencies = ["streamlib>=0.21.0", "numpy>=2.1"]
 
 [project.optional-dependencies]
+neural = ["torch", "torchvision", "diffusers", "transformers", "accelerate", "safetensors", "pillow", "huggingface_hub"]
 webrtc = ["streamlib-webrtc>=0.2.0"]
 test = ["pytest>=8"]
 

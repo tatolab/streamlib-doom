@@ -26,6 +26,13 @@ The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Giv
 
 - Mission: `{"command":"mission","goal":"courtyard"}` — goal patrol|courtyard|hangar|hold. The robot's planner (a processor in the graph) finds its own way there over a costmap and fights what its perception node sees in the camera frame.
 
+- Neural style: `{"command":"style","style":"anime"}` — presets photoreal|anime|claymation|watercolor|alien|lego|none, or any free-text prompt. The diffusion re-render node (if one is in the graph) re-imagines every frame in that style, geometry locked to the game by its depth.
+- Repaint: `{"command":"repaint","style":"marble"}` — the repainter node generates new wall and floor textures in that material and patches them into the running renderer's atlas.
+
+## The neural nodes are processors too
+
+`streamlib_doom.neural:DiffusionRerender` (connect `Render.view_to_downstream` → its `view_from_upstream`, its `neural_to_downstream` → `Console.neural_from_upstream`), `NeuralDepth` (same input; `depth_trio_to_downstream` → `Console.depth_trio_from_upstream`), `MonsterDetector` (same input; `detector_pane_to_downstream` → `Console.detector_from_upstream`; its `detections_to_downstream` can replace the oracle perception on `Planner.detections_from_upstream` and `Telemetry.detections_from_upstream`), and `Repainter` (`Game.world_to_downstream` → its `world_from_upstream`; `patches_to_downstream` → `Render.atlas_patch_from_upstream`). Each loads a model on the GPU at setup, so its pane appears a few seconds after it is wired.
+
 ## The robot's sensors are processors too
 
 The game is a robot: the renderer is its camera. These sensors can be added to the running graph with `add_processor` and `connect` (types in the catalog): `streamlib_doom.sensors:DepthSensor` and `SegmentationSensor` (connect `Render.view_to_downstream` → their `view_from_upstream`, their output → `Console.depth_from_upstream` / `segmentation_from_upstream`), `LidarScanner` (from `Game.world_to_downstream`, to `Console.lidar_from_upstream`), `OccupancyMapper` (from `Lidar.scan_to_downstream`, to `Console.map_from_upstream`). Their panes appear on the console the moment they are wired.

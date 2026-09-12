@@ -8,7 +8,7 @@ Not a port of the Doom engine. The real E1M1 from the shareware WAD — its geom
 
 <img src="https://gh-artifact.tatolab.com/streamlib-doom/e1m1-demo.gif" alt="E1M1 rendered by StreamLib" width="640">
 
-[Watch the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
+[Watch the diffusion reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4) · [the robot console reel](https://gh-artifact.tatolab.com/streamlib-doom/doom-console.mp4) · [Play it](#play-it-on-your-phone) · [The robot console](#the-robot-console-sensors-autonomy-and-claude-all-live) · [How it works](#how-it-works) · [WebRTC](#webrtc-h264-over-whip-and-whep)
 
 </div>
 
@@ -53,6 +53,28 @@ To keep it running as a service that survives your terminal:
 scripts/install-service.sh       # a user-level systemd unit named streamlib-doom
 ```
 
+
+## DOOM, re-rendered by a diffusion model — live, graded by its own renderer
+
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/neural-hero.png" alt="the game beside its diffusion re-render, with neural depth, a detector and the level repainted" width="900"></a>
+
+**[Watch the reel with audio](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.mp4)** · [the uncut take](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural-full.mp4) · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-neural.gif)
+
+Four neural networks, each its own process on the same GPU, all reading the renderer's frame through the surface's DLPack door — one engine-side blit to a CUDA tensor, no CPU hop — while the game keeps rendering at 60 fps beside them:
+
+- **A diffusion re-render.** sd‑turbo with a depth ControlNet, one step per frame. The renderer already writes log depth into the view's green channel, so the ControlNet's conditioning costs nothing and the picture is re-imagined in any style with its geometry locked to the game. Claude picks the styles as free-text prompts and applies them over MCP; every frame follows. About 8 frames a second on an RTX 3090 beside everything else.
+- **A depth network, graded against truth.** Depth Anything V2 on the RGB, aligned to the renderer's true depth in log space, with the abs‑rel error on screen every frame. Ten to twenty percent, typically.
+- **A detector, graded against labels.** Grounding DINO asked for monsters, scored live against the renderer's own per-pixel labels: green is what it found, red is what it missed. Mid-reel its detections replace the oracle on the planner's link, and the robot fights from a learned detector.
+- **A repainter.** New wall and floor textures generated for a material Claude names, contrast-stretched and Floyd–Steinberg dithered into the 1993 palette, then written into the atlas the running renderer samples — the level changes under your feet, and the diffusion view follows.
+
+```bash
+uv sync --extra neural                    # CUDA torch, diffusers, transformers
+uv run streamlib run -f showcase.py       # the console
+scripts/neural-setup.py                   # adds the four models and the lidar map over MCP, waits for the weights
+scripts/demo-reel-neural.py               # the reel: Claude chooses the looks and the material
+```
+
+The GPU sits near 100% with all four models running; the models pace themselves (diffusion 8 Hz, depth 4 Hz, detector 2 Hz) so the game's renderer keeps 60 fps and the console around 50. The telemetry pane shows the GPU load, each model's frame time and score, and the console's own rate, so the picture never claims more than it measures.
 
 ## The robot console: sensors, autonomy, and Claude, all live
 
@@ -110,6 +132,7 @@ Each box is one `@processor` class in `streamlib_doom/`, running in its own chil
 | `sensors.py` | depth and segmentation kernels over the renderer's surface, perception from the frame, the lidar, the occupancy mapper |
 | `planner.py` | the costmap, A*, string pulling, door handling, and the mission planner processor whose controls enter the game over a link |
 | `showcase.py` | the live-graph panel, the caption bar, telemetry with the frame witness, and the 1920x1080 console kernel the engine records |
+| `neural.py` | the diffusion re-render, the depth network graded against truth, the detector graded against labels, and the repainter that patches the atlas |
 
 ## Record the demo
 

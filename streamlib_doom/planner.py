@@ -178,8 +178,18 @@ STILL_CONTROLS = {"forward": 0.0, "strafe": 0.0, "turn": 0.0, "fire": 0, "use": 
 
 
 class PlannerMemory:
-    def __init__(self, grid: "NavGrid | None" = None) -> None:
+    """What the follower carries between tics. Routes are computed off the tic thread: a
+    replan that takes a second under load must never stop the controls flowing, because a
+    robot that stops reads as stuck and would replan forever."""
+
+    def __init__(self, grid: "NavGrid | None" = None, synchronous: bool = False) -> None:
+        import threading
         self.grid = grid
+        self.synchronous = synchronous
+        self._lock = threading.Lock()
+        self._pending: threading.Thread | None = None
+        self._result: list | None = None
+        self.route_requested_at = -10_000
         self.mission = None
         self.goal_index = 0
         self.route: list[tuple[float, float]] = []
@@ -194,6 +204,38 @@ class PlannerMemory:
         self.last_x = None
         self.last_y = None
         self.tick = 0
+
+
+def _request_route(memory: "PlannerMemory", start, goal) -> None:
+    """Start computing a route unless one is already computing or was asked for very recently."""
+    if memory.grid is None:
+        memory.route, memory.index = [goal], 0
+        return
+    if memory.synchronous:
+        memory.route = memory.grid.path(start, goal) or [goal]
+        memory.index, memory.best_remaining, memory.progress_tick = 0, 1e9, memory.tick
+        return
+    if memory._pending is not None and memory._pending.is_alive():
+        return
+    if memory.tick - memory.route_requested_at < 70:
+        return
+    import threading
+    memory.route_requested_at = memory.tick
+
+    def work():
+        found = memory.grid.path(start, goal) or [goal]
+        with memory._lock:
+            memory._result = found
+
+    memory._pending = threading.Thread(target=work, daemon=True)
+    memory._pending.start()
+
+
+def _take_route(memory: "PlannerMemory") -> None:
+    with memory._lock:
+        found, memory._result = memory._result, None
+    if found is not None:
+        memory.route, memory.index, memory.best_remaining, memory.progress_tick = found, 0, 1e9, memory.tick
 
 
 def _turn_toward(delta_degrees: float, rate: float = TURN_RATE_DEGREES) -> float:
@@ -238,7 +280,7 @@ def plan(world: dict, detections: list[dict], memory: PlannerMemory) -> dict:
         memory.escape_until = memory.tick + 22
         memory.escape_turn = 5.0 if (memory.tick // 22) % 2 else -5.0
         memory.stuck_ticks = 0
-        memory.replan_at = 0
+        _request_route(memory, (x, y), goals[memory.goal_index] if memory.goal_index < len(goals) else goals[0])
         return controls
 
     if not goals:
@@ -253,12 +295,17 @@ def plan(world: dict, detections: list[dict], memory: PlannerMemory) -> dict:
             return controls  # arrived; hold
         goal = goals[memory.goal_index]
         memory.route, memory.replan_at, memory.best_remaining = [], 0, 1e9
-    if memory.grid is not None and (not memory.route or memory.tick >= memory.replan_at):
-        memory.route = memory.grid.path((x, y), goal) or [goal]
-        memory.index, memory.best_remaining, memory.progress_tick = 0, 1e9, memory.tick
-        memory.replan_at = memory.tick + 70
-    if memory.grid is None:
-        memory.route = [goal]
+    _take_route(memory)
+    if not memory.route or memory.tick >= memory.replan_at:
+        _request_route(memory, (x, y), goal)
+        memory.replan_at = memory.tick + 140
+    if not memory.route:
+        # No route yet: face the goal and creep, so the first second is never a dead stop.
+        wanted = math.degrees(math.atan2(goal[1] - y, goal[0] - x))
+        delta = (wanted - math.degrees(angle) + 180.0) % 360.0 - 180.0
+        controls["turn"] = _turn_toward(delta, 7.0)
+        controls["forward"] = 0.4 if abs(delta) < 30.0 else 0.0
+        return controls
     while memory.index + 1 < len(memory.route) and math.hypot(memory.route[memory.index][0] - x, memory.route[memory.index][1] - y) < 28:
         memory.index += 1
     # Sliding along a wall counts as moving; no progress toward the corner for a second means replan from here.
@@ -267,9 +314,9 @@ def plan(world: dict, detections: list[dict], memory: PlannerMemory) -> dict:
     if remaining < memory.best_remaining - 4.0:
         memory.best_remaining, memory.progress_tick = remaining, memory.tick
     elif memory.tick - memory.progress_tick > 35:
-        memory.route, memory.replan_at, memory.best_remaining, memory.progress_tick = [], 0, 1e9, memory.tick
-        memory.route = memory.grid.path((x, y), goal) if memory.grid is not None else [goal]
-        memory.index, memory.replan_at = 0, memory.tick + 70
+        # Sliding along a wall for a second: ask for a fresh route but keep following this one.
+        memory.best_remaining, memory.progress_tick = 1e9, memory.tick
+        _request_route(memory, (x, y), goal)
     target = memory.route[min(memory.index, len(memory.route) - 1)]
     distance = math.hypot(target[0] - x, target[1] - y)
     wanted = math.degrees(math.atan2(target[1] - y, target[0] - x))
@@ -338,6 +385,9 @@ class MissionPlanner:
         from .wad import Wad
         wad = Wad()
         self.memory = PlannerMemory(NavGrid(Game(wad, wad.level("E1M1"))))
+        # Warm the edge cache off the tic thread so the first real route is quick.
+        import threading
+        threading.Thread(target=lambda: self.memory.grid.path(HANGAR_START, GOALS["courtyard"][0]), daemon=True).start()
         log.info(f"MARKER:PLANNER_SETUP pid={os.getpid()} cells={int(self.memory.grid.walkable.sum())}")
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -349,7 +399,7 @@ class MissionPlanner:
             return
         self.last_tick = world["tick"]
         # Detections older than half a second describe a scene that is gone.
-        detections = self.detections if world["tick"] - self.detections_tick < 18 else []
+        detections = self.detections if world["tick"] - self.detections_tick < 40 else []  # a 2 Hz learned detector still counts
         controls = plan(world, detections, self.memory)
         controls.update(tick=world["tick"], timestamp_ns=clock.monotonic_now_ns(), pid=os.getpid(),
                         route=[[round(px), round(py)] for px, py in self.memory.route[self.memory.index:]])

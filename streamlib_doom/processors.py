@@ -271,12 +271,16 @@ class E1M1GameRenderer(_GpuStage):
     @input(delivery_profile="newest")
     def world_from_upstream(self) -> None: ...
 
+    @input(delivery_profile="ordered")
+    def atlas_patch_from_upstream(self) -> None: ...
+
     @output()
     def view_to_downstream(self) -> None: ...
 
     def __init__(self) -> None:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=3)
         self.frames = 0
+        self.repaints = 0
         self.previous: dict | None = None
         self.current: dict | None = None
         self.current_arrived_ns = 0
@@ -322,8 +326,36 @@ class E1M1GameRenderer(_GpuStage):
             rows[2, k] = (floors[k], ceilings[k], 0.0, 0.0)
         return rows, min(len(visible), 256)
 
+    def _apply_patches(self, bag: dict) -> None:
+        """New pixels for named atlas entries, written straight into the texture the kernel samples."""
+        atlas = self.shared.atlas
+        self._atlas_texture.lock(read_only=False)
+        try:
+            pixels = self._atlas_texture.as_numpy()
+            applied = 0
+            for patch in bag.get("patches") or []:
+                entry = atlas.ids.get(patch["key"])
+                if entry is None:
+                    continue
+                x, y, w, h, _left, _top = atlas.entries[entry]
+                indices = numpy.frombuffer(patch["indices"], dtype=numpy.uint8)
+                if indices.size != patch["w"] * patch["h"] or (patch["w"], patch["h"]) != (w, h):
+                    continue
+                pixels[y : y + h, x : x + w, 0] = indices.reshape(h, w)
+                pixels[y : y + h, x : x + w, 1] = 255
+                applied += 1
+        finally:
+            self._atlas_texture.unlock()
+        self.repaints += 1
+        _log("RENDERER_REPAINT", style=bag.get("style"), applied=applied)
+
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         now = clock.monotonic_now_ns()
+        while True:
+            patches = ctx.inputs.read("atlas_patch_from_upstream")
+            if patches is None:
+                break
+            self._apply_patches(patches)
         latest = ctx.inputs.read("world_from_upstream")
         if latest is not None and (self.current is None or latest["tick"] != self.current["tick"]):
             self.previous, self.current, self.current_arrived_ns = self.current, latest, now

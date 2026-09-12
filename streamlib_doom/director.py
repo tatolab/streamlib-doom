@@ -23,9 +23,10 @@ DIRECTOR_ENDPOINT = os.environ.get("STREAMLIB_DOOM_DIRECTOR_URL", "http://127.0.
 @dataclasses.dataclass
 class DirectorCommandConfig:
     command: Annotated[
-        Literal["spawn", "give", "lights", "effect", "message", "god", "heal", "autopilot", "mission"],
-        "What to do: spawn monsters, give the player things, set the lights, set a screen effect, post a message, god mode, heal, hand the marine to the autopilot, or give the planner a mission.",
+        Literal["spawn", "give", "lights", "effect", "message", "god", "heal", "autopilot", "mission", "style", "repaint"],
+        "What to do: spawn monsters, give the player things, set the lights, set a screen effect, post a message, god mode, heal, hand the marine to the autopilot, give the planner a mission, set the diffusion re-render's style, or repaint the level's textures.",
     ]
+    style: Annotated[str, "For style: a preset (photoreal, anime, claymation, watercolor, alien, lego, none) or any free-text prompt for the diffusion re-render. For repaint: the material or look the generated wall and floor textures should have, e.g. marble, rusted copper, candy."] = "photoreal"
     goal: Annotated[Literal["patrol", "courtyard", "hangar", "hold"], "For mission: where the planner takes the robot. patrol loops the level; courtyard and hangar go there and hold; hold stops."] = "patrol"
     kind: Annotated[Literal["imp", "zombieman"], "For spawn: which monster."] = "imp"
     count: Annotated[int, "For spawn: how many, 1 to 8."] = 1

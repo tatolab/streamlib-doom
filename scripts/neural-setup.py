@@ -31,6 +31,7 @@ NODES = [  # name, type, (from, from_port) input, (to, to_port) output
     ("Substitute", "streamlib_doom.models:MonsterModelSubstitution", ("HUD", "frame_to_downstream", "view_from_upstream"), ("substitute_to_downstream", "Console", "neural_from_upstream")),
     ("DepthNet", "streamlib_doom.neural:NeuralDepth", ("Render", "view_to_downstream", "view_from_upstream"), ("depth_trio_to_downstream", "Console", "depth_trio_from_upstream")),
     ("Detector", "streamlib_doom.neural:MonsterDetector", ("Render", "view_to_downstream", "view_from_upstream"), ("detector_pane_to_downstream", "Console", "detector_from_upstream")),
+    ("Transcript", "streamlib_doom.transcript:LiveEventTranscript", ("Game", "world_to_downstream", "world_from_upstream"), ("transcript_to_downstream", None, None)),
     ("Repainter", "streamlib_doom.neural:Repainter", ("Game", "world_to_downstream", "world_from_upstream"), ("patches_to_downstream", "Render", "atlas_patch_from_upstream")),
 ]
 
@@ -38,7 +39,8 @@ NODES = [  # name, type, (from, from_port) input, (to, to_port) output
 if RERENDER_ENABLED:
     NODES.append(("Diffusion", RERENDER_TYPES[RERENDER], ("HUD", "frame_to_downstream", "view_from_upstream"),
                   ("neural_to_downstream", "Console", "neural_from_upstream")))
-EXTRA_LINKS = [("Game", "world_to_downstream", "Substitute", "world_from_upstream")]
+EXTRA_LINKS = [("Game", "world_to_downstream", "Substitute", "world_from_upstream"),
+               ("Perceive", "detections_to_downstream", "Transcript", "detections_from_upstream")]
 
 
 def has(name):

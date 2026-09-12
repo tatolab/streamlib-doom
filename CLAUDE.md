@@ -28,6 +28,7 @@ The `type` for `add_processor` is `streamlib_doom.director:DirectorCommand`. Giv
 - Mission: `{"command":"mission","goal":"circle"}` — goal patrol|courtyard|hangar|circle|hold. **circle** laps a ring around wherever the robot is standing when you set it, which is what to reach for when someone asks it to run in circles.
 - Mission: `{"command":"mission","goal":"courtyard"}` — goal patrol|courtyard|hangar|hold. The robot's planner (a processor in the graph) finds its own way there over a costmap and fights what its perception node sees in the camera frame.
 
+- **Read the transcript instead of the screen.** `curl "http://127.0.0.1:8670/transcript?since=N"` returns only what happened since line N, in sentences. Use it rather than pulling snapshots; a frame costs far more than a line and the graph has already watched every one.
 - The neural pane shows the monsters replaced by a raymarched robot, tracked from the game's own positions. The diffusion re-render is off by default and rides on STREAMLIB_DOOM_RERENDER.
 - Neural style: `{"command":"style","style":"cyberpunk"}` — presets lego|cyberpunk|bladerunner|night_city|photoreal|anime|claymation|watercolor|alien|none, or any free-text prompt you write yourself. The diffusion re-render node (if one is in the graph) re-imagines every frame in that style, geometry locked to the game by its depth.
 - Repaint: `{"command":"repaint","style":"marble"}` — the repainter node generates new wall and floor textures in that material and patches them into the running renderer's atlas.

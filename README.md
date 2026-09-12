@@ -91,6 +91,35 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 ```
 
 
+## A transcript, so an agent never has to look at a frame
+
+An agent watching this game directly would pull frames, and a frame costs orders of magnitude more
+tokens than a line of text and arrives thirty-five times a second. `streamlib_doom/transcript.py`
+watches instead: it reads the world and the perception node's detections at full rate, keeps the
+state a narrator would keep, and writes a line only when something changes.
+
+```
+[67]  78.1s  damage    took 4 damage, health 96
+[69]  79.9s  damage    took 18 damage, health 82
+[70]  80.3s  pickup    picked up 4 shells
+[71]  80.4s  move      moved about 1307 units, now in sector 56
+```
+
+Measured over one 90-second run: **2537 world updates watched, 75 lines written**, and the entire
+session's transcript is 6.3 kB. An agent reads it with a cursor, so it asks only for what it has
+not seen:
+
+```shell
+curl "http://127.0.0.1:8670/transcript?since=40"   # the lines after 40
+curl "http://127.0.0.1:8670/transcript?tail=10"    # the last ten
+```
+
+Getting the noise out was most of the work. Sector changes fire every few steps in a corridor, so
+movement is reported by distance travelled instead; the autonomy regenerates two health a tic, so
+only a gain of ten or more counts as a pickup; a target stepping behind a pillar changes the
+contact count twice a second, so a count has to hold for half a second before it is written down.
+Without those three rules the same run produced 466 lines instead of 75.
+
 ## The monsters, swapped for something else, tracked live
 
 The renderer already writes what every pixel is and how far away it is, and the game already

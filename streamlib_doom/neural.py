@@ -177,14 +177,14 @@ class DiffusionRerender(_NeuralBase):
         self.previous = None
         self.previous_pose = None
         self.previous_style = None
-        # Measured on a 48-frame capture of the robot walking (scripts/../streamlib_doom/capture.py):
-        # carrying more of the last frame and refining it gently halves the frame-to-frame change,
-        # but the carry is a resample, so detail bleeds away over a few seconds. Sharpening the
-        # carried image and re-imagining hard from the game frame every few frames puts the studs
-        # back. Both the change and the detail come out ahead of refining hard every frame.
+        # Tuned on a captured walk (streamlib_doom/capture.py). The carry is a resample, so colour
+        # and stud detail drain out of a pure feedback loop within seconds; a hard re-imagine from
+        # the game frame puts them back but reads as a strobe. The refresh re-imagines from the
+        # carried image instead, at a third of the cut's magnitude, and keeps the composition.
         self.carry = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_CARRY", "0.82"))
-        self.unsharp = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_UNSHARP", "1.2"))
-        self.key_every = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_EVERY", "6"))
+        self.unsharp = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_UNSHARP", "1.8"))
+        self.refresh_every = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFRESH_EVERY", "6"))
+        self.refresh_strength = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFRESH_STRENGTH", "0.6"))
         self.refine_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_REFINE_STEPS", "4"))
         self.lift = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_LIFT", "0.7"))
         self.keyframe_steps = int(os.environ.get("STREAMLIB_DOOM_DIFFUSION_KEY_STEPS", "4"))
@@ -245,8 +245,8 @@ class DiffusionRerender(_NeuralBase):
         near = 1.0 - codes.half() / 255.0  # depth code: 0 near .. 255 far/sky
         control = torch.nn.functional.interpolate(near, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False).repeat(1, 3, 1, 1)
         pose = view.get("pose")
-        keyframe = (self.previous is None or style != self.previous_style or pose is None or self.previous_pose is None
-                    or (self.key_every and self.frames % self.key_every == 0))
+        keyframe = self.previous is None or style != self.previous_style or pose is None or self.previous_pose is None
+        refresh = not keyframe and self.refresh_every and self.frames % self.refresh_every == 0
         if not keyframe:
             depth_z = torch.nn.functional.interpolate(codes, size=(NEURAL_H, NEURAL_W), mode="nearest")[0, 0]
             depth_z = 4.0 * torch.pow(2.0, depth_z / 255.0 * 8.0)
@@ -256,7 +256,7 @@ class DiffusionRerender(_NeuralBase):
             weight = valid * self.carry
             init = (carried.half() * weight.half() + game * (1.0 - weight.half())).clamp(0, 1)
             self.generator.manual_seed(7)
-            out = self._run(init, control, prompt)
+            out = self._run(init, control, prompt, steps=4, strength=self.refresh_strength) if refresh else self._run(init, control, prompt)
         else:
             self.generator.manual_seed(7)
             out = self._run(game, control, prompt, steps=self.keyframe_steps, strength=self.keyframe_strength)

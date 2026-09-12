@@ -517,7 +517,7 @@ class GameStatusBarCompositor(_GpuStage):
                 group_count=(VIEW_W // 8, VIEW_H // 8, 1),
                 push_constants=struct.pack("<4f", float(min(len(draws), 200)), float(weapon_map), effect_index, float(view.get("tick", 0))))
         ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], event_log=view["event_log"], tick=view["tick"],
-                                                            pose=view.get("pose"),
+                                                            pose=view.get("pose"), effect=int(effect_index),
                                                             stage_ns={**(view.get("stage_ns") or {}), "hud": clock.monotonic_now_ns()}, pid=os.getpid(),
                                                             state=view["state"], hud={k: hud[k] for k in ("bullets", "shells", "health", "armor", "ready", "face", "message", "dead", "kills")}))
         self.frames += 1

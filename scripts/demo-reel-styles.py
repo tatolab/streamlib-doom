@@ -37,35 +37,35 @@ def main() -> int:
 
     caption("DOOM, REBUILT IN LEGO — WHILE IT PLAYS", "a diffusion model in its own process re-imagines every frame · 1993 on the left, bricks on the right")
     time.sleep(9)
-    caption("EVERY GLOWING BORDER IS A LIVE CHANNEL", "each pane lights when a frame lands in it — fast ones hold, slow ones pulse, one runtime feeding all of them")
-    time.sleep(9)
-
-    # Claude starts thinking here so its answer lands as the reel reaches it, not thirty seconds later.
-    ids_before = {n["id"] for n in graph()["nodes"]}
-    style_before = state().get("style")
-    monsters_before = state().get("monsters_alive", 0)
-    proc = claude("Look at the game, then pick one striking visual style of your own for the diffusion re-render — not lego and not cyberpunk — "
-                  "and apply it with add_processor: a DirectorCommand named 'Claude: <two-word name>' with command style and your prompt in the style field. "
-                  "Then spawn three imps ahead of the robot with a second DirectorCommand. Reply in two short sentences: what you saw, and what you chose.")
     caption("GEOMETRY LOCKED BY THE GAME'S OWN DEPTH", "the renderer writes depth into every frame anyway; the model takes it as conditioning, free")
     time.sleep(9)
 
-    caption("ONE COMMAND CHANGES THE WORLD", "the same graph, the same frames — only the prompt moved")
-    time.sleep(4)
+    # The director session starts here so its result lands when the reel reaches it.
+    ids_before = {n["id"] for n in graph()["nodes"]}
+    style_before = state().get("style")
+    spawns_before = sum("teleported" in d for d in state().get("director_log") or [])
+    proc = claude("Look at the game, then pick one striking visual style of your own for the diffusion re-render — not lego and not cyberpunk — "
+                  "and apply it with add_processor: a DirectorCommand named 'Claude: <two-word name>' with command style and your prompt in the style field. "
+                  "Then spawn three imps ahead of the robot with a second DirectorCommand. Reply in two short sentences: what you saw, and what you chose.")
+    nodes = len(graph()["nodes"])
+    caption(f"{nodes} PROCESSORS · ONE GRAPH · ONE GPU", "the left pane is this node's own /api/graph, drawn live — every box is its own process")
+    time.sleep(9)
+
     director(command="style", style="cyberpunk")
-    time.sleep(3)
-    caption("…AND NOW IT IS BLADE RUNNER", "neon, chrome and wet concrete on the same corridors · nothing restarted, nothing re-wired")
-    time.sleep(11)
+    caption("STYLE UPDATED · CYBERPUNK", "director command over MCP · the same graph, the same frames — only the prompt moved")
+    time.sleep(12)
     caption("THE SENSORS NEVER NOTICED", "depth, detection and the map read the game's frame, not the dream · they are unchanged")
     time.sleep(9)
 
-    caption("NOW CLAUDE PICKS ONE", 'claude -p on the desktop · MCP into this node · ./director.sh "pick a look"')
+    caption("DIRECTOR · NEW SESSION", 'claude -p on the desktop, MCP into this node · ./director.sh "pick a look of your own"')
     if wait_for(lambda: state().get("style") not in (style_before, "cyberpunk"), 60):
-        time.sleep(2)
-        caption(f"CLAUDE: {(claude_node(ids_before) or 'a look of its own').upper()[:34]}", "it chose the words, added the processor, and the next frame wore them")
+        time.sleep(1)
+        caption(f"STYLE UPDATED · {(claude_node(ids_before) or 'a look of its own').upper()[:30]}", "set by the director over MCP · one processor added, nothing restarted, nothing re-wired")
         time.sleep(10)
-    if wait_for(lambda: state().get("monsters_alive", 0) > monsters_before, 40):
-        caption("AND SENT SOMETHING TO MEET IT", "a second processor · the robot fights from what its own camera sees, in whatever the world now looks like")
+    # The log, not the alive count: the robot can kill the spawn before a one-second poll sees it.
+    if wait_for(lambda: sum("teleported" in d for d in state().get("director_log") or []) > spawns_before, 40):
+        did = next((d for d in reversed(state().get("director_log") or []) if "teleported" in d), "spawned monsters")
+        caption("SPAWNED · " + did.replace("teleported ", "").replace(" the player", "").upper()[:28], "a second processor over MCP · the robot fights from what its own camera sees")
         time.sleep(10)
     wait_for(lambda: proc.poll() is not None, 20)
     time.sleep(3)

@@ -93,18 +93,18 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 
 ## One graph, three worlds — LEGO, neon, and whatever Claude picks
 
-<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/styles-cyberpunk.png" alt="the same corridor as LEGO, as blade runner neon, and as stained glass" width="900"></a>
+<a href="https://gh-artifact.tatolab.com/streamlib-doom/doom-worlds.mp4"><img src="https://gh-artifact.tatolab.com/streamlib-doom/worlds-cyberpunk.png" alt="the same corridor as LEGO, as blade runner neon, and as stained glass" width="900"></a>
 
-**[Watch it](https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.mp4)** · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-styles.gif) · stills: [LEGO](https://gh-artifact.tatolab.com/streamlib-doom/styles-lego.png) · [neon](https://gh-artifact.tatolab.com/streamlib-doom/styles-cyberpunk.png) · [Claude's pick](https://gh-artifact.tatolab.com/streamlib-doom/styles-claude.png)
+**[Watch it](https://gh-artifact.tatolab.com/streamlib-doom/doom-worlds.mp4)** · [GIF](https://gh-artifact.tatolab.com/streamlib-doom/doom-worlds.gif) · stills: [LEGO](https://gh-artifact.tatolab.com/streamlib-doom/worlds-lego.png) · [neon](https://gh-artifact.tatolab.com/streamlib-doom/worlds-cyberpunk.png) · [stained glass, the director's pick](https://gh-artifact.tatolab.com/streamlib-doom/worlds-stained-glass.png) · [the border flash](https://gh-artifact.tatolab.com/streamlib-doom/worlds-flash.png)
 
 The level in bricks, then one `style` command turns it into Blade Runner without restarting or
 re-wiring anything, then `claude -p` picks a look of its own, adds the processor that applies it and
 sends monsters to meet the robot in it. The sensors never notice: depth, detection and the map read
 the game's frame, not the dream.
 
-Every pane carries a rim that lights when a frame lands in it. The game's holds steady at 60 fps, the
-re-render's shimmers at 12 Hz, the detector's blinks once or twice a second, and a pane nothing feeds
-stays dark — the graph's liveness drawn on the picture itself, straight from when each bag arrived.
+A pane's border flashes for a couple of seconds when what feeds it was reconfigured — a new style
+on the re-render, a screen effect on the game, a swapped model, a node added to the graph — and
+stays dark otherwise, so the eye goes to what changed and nothing else blinks.
 
 ## DOOM, rebuilt in LEGO while you play — a diffusion model, graded by its own renderer
 
@@ -135,9 +135,11 @@ as you like. Two numbers matter — how much a frame changes from the last one r
 camera, and how much high-frequency detail survives — and they pull against each other. Carrying more
 of the previous frame and refining it gently halves the change, but the carry is a resample, so the
 studs bleed away over a few seconds and a perfectly steady picture is usually a washed-out one.
-Sharpening the carried image and re-imagining hard from the game frame every sixth frame puts them
-back. Measured over a 48-frame capture of the robot walking, that lands 13% steadier *and* 24% more
-detailed than refining hard every frame, and it is what ships. A longer, more specific prompt measured
+Re-imagining hard from the game frame every few frames puts them back, but each cut is a strobe.
+What ships instead refreshes every sixth frame *from the carried image*, at a third of the cut's
+magnitude, so the composition holds and the colour comes back: measured over a 48-frame capture of
+the robot walking, 37% less frame-to-frame change than refining hard every frame, 27% more detail,
+and no cuts. A longer, more specific prompt measured
 slightly worse on both counts; a reference image would need a base model IP-Adapter supports, and
 sd-turbo's SD 2.1 is not one.
 

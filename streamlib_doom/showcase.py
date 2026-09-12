@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import struct
 import subprocess
@@ -675,9 +676,9 @@ layout(push_constant) uniform PC { float palette; float badge; float reproject; 
                                    float f_graph; float f_game; float f_neural; float f_depth;
                                    float f_detector; float f_map; float f_telemetry; float f_caption; } pc;
 
-// A ring just outside a pane, lit by how recently that pane took a new frame: the fast ones hold
-// a steady glow, the slow ones pulse, and a pane nothing feeds stays dark. It is the graph's
-// liveness drawn on the picture itself.
+// A ring just outside a pane, lit for a moment when what feeds that pane was reconfigured — a
+// new style, a screen effect, a swapped model, a node added to the graph — so the eye goes to
+// what changed.
 bool on_ring(ivec2 at, int x0, int y0, int w, int h, int t) {
     bool outside = at.x < x0 - t || at.x >= x0 + w + t || at.y < y0 - t || at.y >= y0 + h + t;
     bool inside = at.x >= x0 && at.x < x0 + w && at.y >= y0 && at.y < y0 + h;
@@ -771,7 +772,9 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 """
 
 REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
-GLOW_SECONDS = float(os.environ.get("STREAMLIB_DOOM_GLOW_SECONDS", "0.20"))
+FLASH_SECONDS = float(os.environ.get("STREAMLIB_DOOM_FLASH_SECONDS", "2.4"))
+# What a pane's border answers to: the keys of its bag that describe its configuration, not its content.
+PANE_SIGNATURE_KEYS = {"neural": ("style",), "frame": ("effect",), "depth_trio": ("model",), "detector": ("model",), "map": ("model",)}
 DIRECTOR_ACTIONS = (
     "spawn monsters  ·  give weapons  ·  set the lights",
     "screen effect  ·  HUD message  ·  god  ·  heal",
@@ -830,7 +833,8 @@ class ConsoleCompositor:
         self._ring = ProcessorOutputTextureRing("rgba8_unorm", RING_USAGE, depth=4)
         self.latest: dict = {}
         self.arrived: dict = {}  # pane -> monotonic time its newest bag arrived
-        self.graph_event_at = -1e9
+        self.changed_at: dict = {}  # pane -> monotonic time its configuration last changed
+        self.signature: dict = {}
         self.handles: dict = {}  # pane -> (surface_id, handle, frame index it was resolved at)
         self.perception: dict | None = None
         self.frames = 0
@@ -841,18 +845,14 @@ class ConsoleCompositor:
         self.last_witness = 0.0
 
     def _freshness(self) -> list:
-        """One value per pane: 1.0 the instant a frame lands, fading over GLOW_SECONDS. A pane
-        fed at 12 Hz never fades, one fed at 1.5 Hz visibly pulses, an empty one stays dark."""
+        """One value per pane: a few fading pulses after the pane's configuration changed, else 0."""
         now = time.monotonic()
-        def age(name):
-            arrived = self.arrived.get(name)
-            if not arrived:
+        def flash(name):
+            t = now - self.changed_at.get(name, -1e9)
+            if t < 0.0 or t >= FLASH_SECONDS:
                 return 0.0
-            # Sharp falloff, so a 60 fps pane holds a steady rim, a 12 Hz one shimmers and a
-            # 1.5 Hz one is dark most of the time and blinks when its frame lands.
-            return max(0.0, 1.0 - (now - arrived) / GLOW_SECONDS) ** 2.0
-        graph = 1.0 if now - self.graph_event_at < 2.0 else age("graph")
-        return [graph, age("frame"), age("neural"), age("depth_trio"), age("detector"), age("map"), age("telemetry"), age("caption")]
+            return (1.0 - t / FLASH_SECONDS) * (0.55 + 0.45 * math.cos(2.0 * math.pi * t / 0.6))
+        return [flash("graph"), flash("frame"), flash("neural"), flash("depth_trio"), flash("detector"), flash("map"), flash("telemetry"), flash("caption")]
 
     def _placeholder(self, gpu, w: int, h: int, text: str):
         texture = gpu.acquire_texture(w, h, "rgba8_unorm", ["texture_binding"])
@@ -957,8 +957,14 @@ class ConsoleCompositor:
             if bag is not None:
                 self.latest[name] = bag
                 self.arrived[name] = time.monotonic()
-                if name == "graph" and bag.get("event"):
-                    self.graph_event_at = time.monotonic()
+                if name == "graph":
+                    if bag.get("event") and time.monotonic() - self.changed_at.get("graph", -1e9) > FLASH_SECONDS:
+                        self.changed_at["graph"] = time.monotonic()
+                elif name in PANE_SIGNATURE_KEYS:
+                    signature = tuple(bag.get(key) for key in PANE_SIGNATURE_KEYS[name])
+                    if name in self.signature and signature != self.signature[name]:
+                        self.changed_at[name] = time.monotonic()
+                    self.signature[name] = signature
         frame = ctx.inputs.read("frame_from_upstream")
         if frame is not None:
             self.arrived["frame"] = time.monotonic()

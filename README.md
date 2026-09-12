@@ -91,6 +91,18 @@ scripts/install-service.sh       # a user-level systemd unit named streamlib-doo
 ```
 
 
+## The output, built up one processor at a time
+
+The right-hand pane is the graph's own picture, and everything in it arrived by being added to a
+running node. `streamlib_doom/treatments.py` is one processor with nine looks — bloom, scanlines,
+outline, grade, chromatic, vignette, sharpen, posterize, underwater — and the shape is deliberate:
+RGB in, RGB out, same size, one compute kernel. So they chain. Adding a second is one
+`add_processor` and two `connect` calls, the graph grows a box, and the next frame is different.
+Remove it and the picture goes back.
+
+Measured live: bloom, then a colour grade, then scanlines, spliced one at a time into a node that
+was already running, with the game still being played and nothing restarted.
+
 ## A transcript, so an agent never has to look at a frame
 
 An agent watching this game directly would pull frames, and a frame costs orders of magnitude more

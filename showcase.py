@@ -18,7 +18,10 @@ from streamlib import H264Encoder, Mp4Sink, OpusEncoder, Runtime
 
 import streamlib_doom.director  # noqa: F401 — DirectorCommand joins the catalog
 import streamlib_doom.effects  # noqa: F401 — ScreenEffect joins the catalog
+import streamlib_doom.models  # noqa: F401 — MonsterModelSubstitution joins the catalog
 import streamlib_doom.sensors  # noqa: F401 — the sensors join the catalog, for add_processor
+import streamlib_doom.transcript  # noqa: F401 — LiveEventTranscript joins the catalog
+import streamlib_doom.treatments  # noqa: F401 — PictureTreatment joins the catalog, for stacking
 from streamlib_doom.planner import MissionPlanner
 from streamlib_doom.processors import BrowserFrameSender, DoomAudioMixer, DoomGame, E1M1GameRenderer, GameStatusBarCompositor
 from streamlib_doom.sensors import PerceptionNode

@@ -154,6 +154,13 @@ needs guidance above 1 to apply at all, and that second pass per step is worth i
 the captured walk, going from strength 0.5 to 0.85 with a negative prompt took detail from 5.4 to
 14.3, nearly three times, at 6 Hz instead of 12.
 
+Only the level is rebuilt. The same class channel that conditions the model also masks it: the
+re-render is composited back over the game's own pixels everywhere the renderer says a pixel is not
+a wall, floor or ceiling, so monsters, barrels, pickups, projectiles and the sky stay as 1993 drew
+them and only the world around them turns to brick. The mask is feathered by one box blur so the
+edge does not read as a cut-out. `STREAMLIB_DOOM_RESTYLED_CLASSES` takes the class codes to restyle,
+default `1,2,3`; set it to `0,1,2,3,4,5,6,7` to put everything through the model as before.
+
 Loading two ControlNets and compiling them takes about 95 s and the engine caps `setup()` at 60 s,
 so the load runs on a worker thread and `process()` publishes nothing until it reports ready. A longer, more specific prompt measured
 slightly worse on both counts; a reference image would need a base model IP-Adapter supports, and

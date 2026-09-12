@@ -61,6 +61,11 @@ NEGATIVE_PROMPT = os.environ.get("STREAMLIB_DOOM_NEGATIVE_PROMPT",
                                  "3d render, video game graphics, low-poly, cell-shaded, flat shading, "
                                  "smooth shading, blurry, washed out, grainy, muddy, low detail")
 GUIDANCE = float(os.environ.get("STREAMLIB_DOOM_DIFFUSION_GUIDANCE", "1.5"))
+# Only the level itself is rebuilt. Monsters, pickups, barrels, projectiles and the sky keep the
+# game's own pixels, composited back over the re-render through the renderer's per-pixel classes,
+# so the things you shoot at stay readable and only the world around them turns to brick.
+RESTYLED_CLASSES = tuple(int(c) for c in os.environ.get("STREAMLIB_DOOM_RESTYLED_CLASSES", "1,2,3").split(",") if c.strip())
+MASK_FEATHER = int(os.environ.get("STREAMLIB_DOOM_MASK_FEATHER", "1"))
 DEFAULT_STYLE = os.environ.get("STREAMLIB_DOOM_STYLE", "lego")
 # The renderer's camera: FOCAL and CENTER_Y for a 320x200 view, scaled with the output.
 VIEW_FOCAL, VIEW_CENTER_Y = 160.0, 100.0
@@ -268,14 +273,22 @@ class DiffusionRerender(_NeuralBase):
         with ctx.gpu_limited_access.resolve_surface(view["surface_id"]) as handle:
             tensor, self.path = _view_tensor(handle, torch)
         rgb = self._rgb(tensor, 0).permute(2, 0, 1)[None].half() / 255.0  # (1,3,H,W), base palette: the flash is a HUD effect
+        plain = torch.nn.functional.interpolate(rgb, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False)
         rgb = rgb.float().pow(self.lift).half()  # a toy photograph is lit; Doom's corridors are not
         game = torch.nn.functional.interpolate(rgb, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False)
         codes = tensor[:, :, 1].float()[None, None]
         near = 1.0 - codes.half() / 255.0  # depth code: 0 near .. 255 far/sky
         control = torch.nn.functional.interpolate(near, size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False).repeat(1, 3, 1, 1)
-        segment = self._class_lut[tensor[:, :, 2].long()].permute(2, 0, 1)[None].half() / 255.0
+        classes = tensor[:, :, 2].long()
+        segment = self._class_lut[classes].permute(2, 0, 1)[None].half() / 255.0
         segment = torch.nn.functional.interpolate(segment, size=(NEURAL_H, NEURAL_W), mode="nearest")
         control = [control, segment]
+        restyled = torch.zeros(classes.shape, dtype=torch.float32, device=classes.device)
+        for code in RESTYLED_CLASSES:
+            restyled += (classes == code).float()
+        mask = torch.nn.functional.interpolate(restyled[None, None], size=(NEURAL_H, NEURAL_W), mode="bilinear", align_corners=False)
+        for _ in range(MASK_FEATHER):
+            mask = torch.nn.functional.avg_pool2d(mask, 3, stride=1, padding=1)
         pose = view.get("pose")
         keyframe = self.carry <= 0.0 or self.previous is None or style != self.previous_style or pose is None or self.previous_pose is None
         if not keyframe:
@@ -291,6 +304,8 @@ class DiffusionRerender(_NeuralBase):
         else:
             self.generator.manual_seed(7)
             out = self._run(game, control, prompt, steps=self.refine_steps, strength=self.refine_strength)
+        out = out[None] if out.ndim == 3 else out
+        out = (out.half() * mask.half() + plain * (1.0 - mask.half())).clamp(0, 1)[0]
         self.previous = out.detach()[None] if out.ndim == 3 else out.detach()
         self.previous_pose, self.previous_style = pose, style
         image = (out.clamp(0, 1) * 255).to(torch.uint8).permute(1, 2, 0).cpu().numpy()

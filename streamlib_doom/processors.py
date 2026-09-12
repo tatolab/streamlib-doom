@@ -196,7 +196,7 @@ class E1M1GameRenderer(_GpuStage):
                       "colormap": self._colormap_texture, "view_image": slot},
             group_count=(VIEW_W // 32, 1, 1), push_constants=push)
         ctx.outputs.write("view_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, hud=world["hud"], palette=world["palette"],
-                                                           events=world["events"], sector_light=world["lights"][world["sector"]],
+                                                           event_log=world["event_log"], sector_light=world["lights"][world["sector"]],
                                                            extralight=world["extralight"], tick=world["tick"]))
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
@@ -319,7 +319,7 @@ class GameStatusBarCompositor(_GpuStage):
                           "hud": self._hud_texture, "colormap": self._colormap_texture, "frame_image": slot},
                 group_count=(VIEW_W // 8, VIEW_H // 8, 1),
                 push_constants=struct.pack("<4f", float(min(len(draws), 200)), float(weapon_map), 0.0, 0.0))
-        ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], events=view["events"], tick=view["tick"]))
+        ctx.outputs.write("frame_to_downstream", _video_bag(slot, VIEW_W, VIEW_H, palette=view["palette"], event_log=view["event_log"], tick=view["tick"]))
         self.frames += 1
         if self.frames in (1, 35, 35 * 60):
             _log("COMPOSITOR_FRAME", frames=self.frames, draws=len(draws))
@@ -331,11 +331,12 @@ class BrowserFrameSender:
     """Serves the page, the palettes, the music and the effects over HTTP, and
     every composited frame over a WebSocket as the 8-bit buffer it is."""
 
-    @input(delivery_profile="ordered")
+    @input(delivery_profile="newest")
     def frame_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
         self.frames = 0
+        self.last_event_tick = -1
         self.broadcaster = wsserver.Broadcaster()
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -410,16 +411,12 @@ class BrowserFrameSender:
         _log("BRIDGE_SETUP", page_port=PAGE_PORT, effects=len(effects), music_bytes=len(music))
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        latest = None
-        events: list[str] = []
-        while True:
-            frame = ctx.inputs.read("frame_from_upstream")
-            if frame is None:
-                break
-            latest = frame
-            events.extend(frame.get("events") or [])
+        latest = ctx.inputs.read("frame_from_upstream")
         if latest is None:
             return
+        events = [name for tick, name in latest.get("event_log") or [] if tick > self.last_event_tick]
+        if latest.get("event_log"):
+            self.last_event_tick = max(self.last_event_tick, max(tick for tick, _ in latest["event_log"]))
         self.frames += 1
         if self.broadcaster.count() == 0:
             return
@@ -452,7 +449,7 @@ class DoomAudioMixer:
     """The score and every sound effect the game fires, mixed live into 10 ms
     blocks for an Opus encoder — what a WHIP session or a recording hears."""
 
-    @input(delivery_profile="ordered")
+    @input(delivery_profile="newest")
     def world_from_upstream(self) -> None: ...
 
     @output()
@@ -461,6 +458,7 @@ class DoomAudioMixer:
     def __init__(self) -> None:
         self.anchor_ns = 0
         self.next_block = 0
+        self.last_event_tick = -1
         self.pending: list[tuple[int, str]] = []
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -479,13 +477,13 @@ class DoomAudioMixer:
         now = clock.monotonic_now_ns()
         if self.anchor_ns == 0:
             self.anchor_ns = now
-        while True:
-            world = ctx.inputs.read("world_from_upstream")
-            if world is None:
-                break
-            for name in world.get("events") or []:
-                if name in self.effects:
+        world = ctx.inputs.read("world_from_upstream")
+        if world is not None:
+            for tick, name in world.get("event_log") or []:
+                if tick > self.last_event_tick and name in self.effects:
                     self.pending.append((self.next_block, name))
+            if world.get("event_log"):
+                self.last_event_tick = max(self.last_event_tick, max(tick for tick, _ in world["event_log"]))
         while True:
             block_start_ns = self.anchor_ns + self.next_block * 10_000_000
             if block_start_ns - now > AUDIO_LEAD_NS:

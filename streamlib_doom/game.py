@@ -226,11 +226,16 @@ class Game:
         self.plats: dict[int, dict] = {}
         self.used_once: set[int] = set()
         self.events: list[str] = []
+        self.event_log: list[tuple[int, str]] = []
         self.random = random.Random(self.tick_count)
         self.level_complete = 0
 
     # -- tic -------------------------------------------------------------------------
     def tick(self, controls: dict) -> None:
+        # Last tic's sounds go into the log before this tic starts, so a caller
+        # that ticks several times between snapshots loses none of them.
+        self.event_log.extend((self.tick_count, name) for name in self.events)
+        self.event_log = [(t, n) for t, n in self.event_log if t > self.tick_count - 8]
         self.events = []
         self.tick_count += 1
         p = self.player
@@ -821,6 +826,8 @@ class Game:
     def snapshot(self) -> dict:
         p = self.player
         tick = self.tick_count
+        # A consumer polling on `newest` may miss a bag; it replays this log by tick instead.
+        event_log = self.event_log + [(tick, name) for name in self.events]
         bob_angle = (tick % 64) / 64.0 * 2 * math.pi
         view_z = p["z"] + (VIEW_HEIGHT if not p["dead"] else max(6.0, VIEW_HEIGHT - p["dead_tics"] * 1.5)) + p["bob"] / 2.0 * math.sin(bob_angle)
         things = []
@@ -863,5 +870,5 @@ class Game:
                 "bob_x": p["bob"] * math.cos(bob_angle), "bob_y": p["bob"] * abs(math.sin(bob_angle)),
                 "kills": p["kills"], "monsters": len(self.monsters), "complete": self.level_complete > 0,
             },
-            "palette": palette, "events": list(self.events),
+            "palette": palette, "events": list(self.events), "event_log": event_log[-64:],
         }

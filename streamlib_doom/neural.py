@@ -37,6 +37,9 @@ HF_MODELS = {
 }
 STYLES = {
     "lego": "a first-person view of a video game level built entirely out of lego bricks, bright primary colors, glossy plastic studs, lego minifigure monsters, toy photography, studio lighting, sharp focus",
+    "cyberpunk": "cyberpunk blade runner corridor, rain and neon haze, hot pink and electric cyan signage glowing on dark wet concrete, chrome panelling, holographic adverts, anamorphic flare, cinematic night photography, richly detailed",
+    "bladerunner": "blade runner 2049 film still, rain-slicked neon corridor, dense volumetric fog, towering cyan and magenta neon signage, wet reflective floor, brutalist concrete and chrome, anamorphic lens flare, cinematic teal and orange grade, moody",
+    "night_city": "cyberpunk 2077 screenshot, night city interior, saturated neon signage, holographic advertisements, chrome and carbon fibre panels, magenta and cyan rim light, grimy futuristic industrial corridor, high detail",
     "photoreal": "photorealistic abandoned military base interior, corroded steel walls, harsh industrial lighting, film still, 35mm, highly detailed",
     "anime": "anime film still, hand painted sci-fi corridor, cel shaded, studio ghibli lighting, vivid colors",
     "claymation": "claymation stop motion diorama of a spaceship corridor, plasticine, soft studio lighting, macro photo",

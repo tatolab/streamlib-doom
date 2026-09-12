@@ -48,6 +48,12 @@ def has(name):
 
 
 def flowing(name, port) -> bool:
+    if name == "Transcript":  # nothing consumes its output, so a tap cannot attach; its own endpoint is the proof
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8670/transcript?tail=1", timeout=2) as answer:
+                return "lines" in answer.read().decode()
+        except Exception:
+            return False
     out = reel.tool("tap", channel=f"{reel.node_id(name).lower()}/{port}", count=1)
     return int(out.get("received", 0)) >= 1 if isinstance(out, dict) else False
 

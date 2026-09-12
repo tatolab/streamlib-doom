@@ -209,7 +209,7 @@ KIND_COLORS = {
     "claude": ((196, 120, 20), (255, 200, 80)),
     "api": ((36, 38, 46), (70, 74, 88)),
 }
-SHORT_NAMES = {"StatusBar": "HUD", "Browser": "Phone", "Renderer": "Render", "Recorder": "MP4", "GraphPanel": "Graph", "Transcript": "Caption", "Perception": "Perceive", "Segmentation": "Segment", "Telemetry": "Telemetry", "Console": "Console"}
+SHORT_NAMES = {"StatusBar": "HUD", "Browser": "Phone", "Renderer": "Render", "Recorder": "MP4", "GraphPanel": "Graph", "Perception": "Perceive", "Segmentation": "Segment", "Telemetry": "Telemetry", "Console": "Console"}
 
 
 def _layer(nodes: list, links: list) -> dict:
@@ -668,7 +668,7 @@ class TelemetryPanel(_PanelPublisher):
             row("gpu", f"{self.gpu['util']:3.0f}% busy · {self.gpu['used_gb']:.1f} of {self.gpu['total_gb']:.0f} GB", "rgb(255,160,120)" if self.gpu["util"] > 85 else "rgb(225,230,240)")
         models = (self.witness or {}).get("models") or {}
         if models.get("neural"):
-            row("diffusion", f"{models['neural'].get('ms', 0):.0f} ms · {models['neural'].get('fps', 0):.0f} fps · {models['neural'].get('style', '')[:10]}", "rgb(255,200,120)")
+            row("output", f"{models['neural'].get('ms', 0):.0f} ms · {models['neural'].get('fps', 0):.0f} fps · {models['neural'].get('style', '')[:10]}", "rgb(255,200,120)")
         if models.get("depth_trio"):
             row("depth net", f"{models['depth_trio'].get('ms', 0):.0f} ms · abs rel {100 * models['depth_trio'].get('abs_rel', 0):.1f}%", "rgb(255,200,120)")
         if models.get("detector"):
@@ -809,7 +809,7 @@ void main() { ivec2 at = ivec2(gl_GlobalInvocationID.xy); imageStore(scratch_ima
 REPROJECT = os.environ.get("STREAMLIB_DOOM_REPROJECT", "1") == "1"
 FLASH_SECONDS = float(os.environ.get("STREAMLIB_DOOM_FLASH_SECONDS", "2.4"))
 # What a pane's border answers to: the keys of its bag that describe its configuration, not its content.
-PANE_SIGNATURE_KEYS = {"neural": ("style",), "frame": ("effect",), "depth_trio": ("model",), "detector": ("model",), "map": ("model",)}
+PANE_SIGNATURE_KEYS = {"neural": ("style", "model"), "frame": ("effect",), "depth_trio": ("model",), "detector": ("model",), "map": ("model",)}
 DIRECTOR_ACTIONS = (
     "spawn monsters  ·  give weapons  ·  set the lights",
     "screen effect  ·  HUD message  ·  god  ·  heal",
@@ -928,7 +928,7 @@ class ConsoleCompositor:
         self._blank = {
             "view": self._placeholder(gpu, VIEW_W, VIEW_H, "no node yet · add one over MCP"),
             "pane": self._placeholder(gpu, PANE_W, PANE_H, "no node yet · add one over MCP"),
-            "neural": self._placeholder(gpu, NEURAL_W, NEURAL_H, "no diffusion node yet · add one over MCP"),
+            "neural": self._placeholder(gpu, NEURAL_W, NEURAL_H, "no output node yet · add one over MCP"),
             "trio": self._placeholder(gpu, VIEW_W * 3, VIEW_H, "no depth network yet · add one over MCP"),
             "telemetry": self._placeholder(gpu, TELEMETRY_W, TELEMETRY_H, "telemetry starting…"),
             "graph": self._placeholder(gpu, GRAPH_W, GRAPH_H, "graph panel starting…"),
@@ -936,7 +936,7 @@ class ConsoleCompositor:
         }
         chrome = numpy.zeros((OUT_H, OUT_W, 4), dtype=numpy.uint8)
         blit(chrome, render_text("tatolab/streamlib-doom", 430, 40, 26, "white", FONT_BOLD), 16, 12)
-        blit(chrome, render_text("·  DOOM E1M1 rebuilt in LEGO by a diffusion model, graded by its own renderer  ·  every box its own process", 1440, 30, 18, "rgb(160,170,190)", FONT), 456, 18)
+        blit(chrome, render_text("·  DOOM E1M1 as a StreamLib graph  ·  every box its own process  ·  the picture on the right is built by adding processors to it, live", 1440, 30, 18, "rgb(160,170,190)", FONT), 456, 18)
         blit(chrome, render_text("LIVE GRAPH  ·  from this node's own /api/graph", 570, 22, 14, "rgb(150,160,180)", FONT_BOLD), 16, 46)
         blit(chrome, render_text("THE GAME  ·  1993, what the phone sees", 640, 22, 14, "rgb(150,160,180)", FONT_BOLD), 608, 46)
         self._chrome_canvas = chrome

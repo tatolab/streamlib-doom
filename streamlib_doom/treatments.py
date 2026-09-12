@@ -21,7 +21,7 @@ from streamlib import ProcessorOutputTextureRing, RuntimeContextFullAccess, Runt
 RING_USAGE = ["texture_binding", "storage_binding"]
 
 TREATMENTS = {"none": 0, "bloom": 1, "scanlines": 2, "outline": 3, "grade": 4, "chromatic": 5,
-              "vignette": 6, "sharpen": 7, "posterize": 8, "underwater": 9}
+              "vignette": 6, "sharpen": 7, "posterize": 8, "underwater": 9, "neon": 10, "glitch": 11}
 
 TREATMENT_GLSL = r"""#version 450
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -91,6 +91,21 @@ void main() {
     } else if (mode == 9) {                            // underwater: a slow swim plus a cold cast
         float wobble = sin(float(at.y) * 0.10 + pc.tick * 0.08) * k * 5.0;
         out_c = at_offset(at, ivec2(int(wobble), 0), size) * vec3(0.72, 0.95, 1.08);
+    } else if (mode == 10) {                           // neon: every edge a light tube, cyan to magenta across the frame
+        float gx = luma(at_offset(at, ivec2(-1, 0), size)) - luma(at_offset(at, ivec2(1, 0), size));
+        float gy = luma(at_offset(at, ivec2(0, -1), size)) - luma(at_offset(at, ivec2(0, 1), size));
+        float edge = clamp(sqrt(gx * gx + gy * gy) * 5.5 * k, 0.0, 1.0);
+        float across = (float(at.x) + 0.5) / float(size.x);
+        vec3 tube = mix(vec3(0.15, 0.95, 1.0), vec3(1.0, 0.25, 0.9), across);
+        out_c = c * 0.16 + tube * edge * 1.7;
+    } else if (mode == 11) {                           // glitch: bands tear sideways and the channels split
+        float band = floor(float(at.y) / 14.0);
+        float r = fract(sin(band * 12.9898 + floor(pc.tick / 4.0) * 78.233) * 43758.5453);
+        int shift = (r > 0.70) ? int((r - 0.70) * 110.0 * k) : 0;
+        int split = int(5.0 * k);
+        vec3 s = at_offset(at, ivec2(shift, 0), size);
+        out_c = vec3(at_offset(at, ivec2(shift + split, 0), size).r, s.g, at_offset(at, ivec2(shift - split, 0), size).b);
+        if (r > 0.94) out_c = mix(out_c, vec3(0.9, 1.0, 1.0), 0.18);
     }
 
     imageStore(frame_image, at, vec4(clamp(out_c, 0.0, 1.0), 1.0));
@@ -101,13 +116,13 @@ void main() {
 @dataclasses.dataclass
 class PictureTreatmentConfig:
     treatment: Annotated[
-        Literal["bloom", "scanlines", "outline", "grade", "chromatic", "vignette", "sharpen", "posterize", "underwater", "none"],
-        "bloom: bright parts bleed. scanlines: CRT lines and a phosphor triad. outline: ink on the edges. grade: teal shadows and warm highlights. chromatic: colour fringing at the edges. vignette: darkened corners. sharpen: an unsharp mask. posterize: banded colour, a printed look. underwater: a slow swim and a cold cast.",
+        Literal["bloom", "scanlines", "outline", "grade", "chromatic", "vignette", "sharpen", "posterize", "underwater", "neon", "glitch", "none"],
+        "bloom: bright parts bleed. scanlines: CRT lines and a phosphor triad. outline: ink on the edges. grade: teal shadows and warm highlights. chromatic: colour fringing at the edges. vignette: darkened corners. sharpen: an unsharp mask. posterize: banded colour, a printed look. underwater: a slow swim and a cold cast. neon: every edge a light tube, cyan to magenta. glitch: bands tear sideways and the channels split.",
     ] = "bloom"
     amount: Annotated[float, "How strong, 0.0 to 2.0. 1.0 is the intended look."] = 1.0
 
 
-@processor(description="One picture treatment on an RGB frame — bloom, scanlines, outline, grade, chromatic, vignette, sharpen, posterize, underwater. RGB in, RGB out, same size, one compute kernel, so they stack: splice as many as you like between whatever produces the picture and whatever shows it. Adding one grows the graph a box and changes the next frame with nothing restarted.")
+@processor(description="One picture treatment on an RGB frame — bloom, scanlines, outline, grade, chromatic, vignette, sharpen, posterize, underwater, neon, glitch. RGB in, RGB out, same size, one compute kernel, so they stack: splice as many as you like between whatever produces the picture and whatever shows it. Adding one grows the graph a box and changes the next frame with nothing restarted.")
 class PictureTreatment:
     def __init__(self, config: PictureTreatmentConfig) -> None:
         self.treatment = config.treatment

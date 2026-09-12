@@ -275,7 +275,7 @@ class Game:
             return
         if p["dead"]:
             p["dead_tics"] += 1
-            if (controls.get("fire") or (self.autopilot and p["dead_tics"] > 3 * TICRATE)) and p["dead_tics"] > TICRATE:
+            if (controls.get("fire") or ((self.autopilot or self.autonomy) and p["dead_tics"] > 3 * TICRATE)) and p["dead_tics"] > TICRATE:
                 autopilot = self.autopilot
                 self.reset()
                 self.autopilot = autopilot
@@ -850,7 +850,8 @@ class Game:
         if verb == "spawn":
             kind = ZOMBIEMAN if command.get("kind") == "zombieman" else IMP
             count = max(1, min(8, int(command.get("count", 1))))
-            placed = self._spawn_monsters(kind, count, str(command.get("where", "behind")))
+            distance = max(64.0, min(900.0, float(command.get("distance", 128) or 128)))
+            placed = self._spawn_monsters(kind, count, str(command.get("where", "behind")), distance)
             did = f"teleported {placed} {'zombieman' if kind == ZOMBIEMAN else 'imp'}{'s' if placed != 1 else ''} {command.get('where', 'behind')} the player"
         elif verb == "give":
             item = str(command.get("item", "shotgun"))
@@ -878,6 +879,8 @@ class Game:
             p["god"] = bool(command.get("on", True))
             did = "god mode " + ("on" if p["god"] else "off")
         elif verb == "heal":
+            if p["dead"]:
+                p["dead"], p["dead_tics"] = False, 0
             p["health"], p["armor"] = 100, max(p["armor"], 100)
             p["armor_type"] = max(p["armor_type"], 1)
             p["bonus_count"] += 12
@@ -887,6 +890,22 @@ class Game:
             self.autopilot = bool(command.get("on", True))
             self.autonomy = self.autopilot  # "autopilot off" is what an agent reaches for to stop everything
             did = "autopilot " + ("on" if self.autopilot else "off, and every machine driver with it")
+        elif verb == "clear":
+            cleared = 0
+            for m in self.monsters:
+                if m["alive"]:
+                    spec = MONSTER[m["kind"]]
+                    m["alive"], m["state"], m["state_tics"], m["frame"] = False, "die", 0, spec["death"][0]
+                    cleared += 1
+            did = f"cleared {cleared} monsters off the level"
+        elif verb == "face":
+            alive = [m for m in self.monsters if m["alive"]]
+            if alive:
+                nearest = min(alive, key=lambda m: math.hypot(m["x"] - p["x"], m["y"] - p["y"]))
+                p["angle"] = math.atan2(nearest["y"] - p["y"], nearest["x"] - p["x"]) % (2 * math.pi)
+                did = "turned the marine to face the nearest monster"
+            else:
+                did = "nothing to face"
         elif verb == "control":
             mode = str(command.get("mode", "auto"))
             self.autonomy = mode in ("auto", "autonomy", "resume")
@@ -920,7 +939,7 @@ class Game:
                 self._say(("DIRECTOR: " + did)[:60])
         return did
 
-    def _spawn_monsters(self, kind: int, count: int, where: str) -> int:
+    def _spawn_monsters(self, kind: int, count: int, where: str, distance: float = 128.0) -> int:
         p = self.player
         spec = MONSTER[kind]
         base = {"behind": math.pi, "ahead": 0.0, "left": math.pi / 2, "right": -math.pi / 2}.get(where, math.pi)
@@ -933,7 +952,7 @@ class Game:
             for offset in (0.0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3.1):
                 bearing = wanted + offset
                 x, y, sector = p["x"], p["y"], p["sector"]
-                for _step in range(int((128 + 32 * (i % 3)) / 8)):
+                for _step in range(int((distance + 32 * (i % 3)) / 8)):
                     nx, ny = self.move_actor(x, y, x + math.cos(bearing) * 8.0, y + math.sin(bearing) * 8.0, spec["radius"], sector, False)
                     if (abs(nx - x) + abs(ny - y)) < 1.0:
                         break
